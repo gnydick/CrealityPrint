@@ -179,15 +179,18 @@ class GLGizmoCut3D : public GLGizmoBase
         ModelObject* model_object() { return m_model.objects.front(); }
         bool valid() const { return m_valid; }
         bool is_one_object() const;
+        bool has_custom_selection() const;
         const std::vector<Part>& parts() const { return m_parts; }
         const std::vector<size_t>* get_ignored_contours_ptr() const { return (valid() ? &m_ignored_contours : nullptr); }
 
         std::vector<Cut::Part> get_cut_parts();
+        bool                   has_modified_cut_parts();
 
     private:
         Model m_model;
         int m_instance_idx;
         std::vector<Part> m_parts;
+        std::vector<bool> m_initial_selection;
         bool m_valid = false;
         std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>> m_contour_to_parts; // for each contour, there is a vector of parts above and a vector of parts below
         std::vector<size_t> m_ignored_contours; // contour that should not be rendered (the parts on both sides will both be parts of the same object)
@@ -367,6 +370,7 @@ private:
     void init_picking_models();
     void init_rendering_items();
     void render_clipper_cut();
+    void render_clipper_contour();
     void clear_selection();
     void reset_connectors();
     void init_connector_shapes();

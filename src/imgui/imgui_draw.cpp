@@ -54,6 +54,9 @@ Index of this file:
 #endif
 #endif
 #include <boost/log/trivial.hpp>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 // Visual Studio warnings
 #ifdef _MSC_VER
@@ -2548,7 +2551,23 @@ static bool ImFontAtlasBuildWithStbTruetype(ImFontAtlas* atlas)
     // 7. Allocate texture
     atlas->TexHeight = (atlas->Flags & ImFontAtlasFlags_NoPowerOfTwoHeight) ? (atlas->TexHeight + 1) : ImUpperPowerOfTwo(atlas->TexHeight);
     atlas->TexUvScale = ImVec2(1.0f / atlas->TexWidth, 1.0f / atlas->TexHeight);
-    atlas->TexPixelsAlpha8 = (unsigned char*)IM_ALLOC(atlas->TexWidth * atlas->TexHeight);
+    const size_t alloc_bytes = static_cast<size_t>(atlas->TexWidth) * static_cast<size_t>(atlas->TexHeight);
+    
+    // 定位日志: 分配前打印内存信息和申请大小
+    BOOST_LOG_TRIVIAL(warning) << "ImFontAtlasBuildWithStbTruetype: about to allocate font texture. "
+        << "TexWidth=" << atlas->TexWidth << ", TexHeight=" << atlas->TexHeight
+        << ", alloc_bytes=" << alloc_bytes << " (" << (alloc_bytes / (1024.0f * 1024.0f)) << " MB)";
+#ifdef _WIN32
+    MEMORYSTATUSEX mem_status{};
+    mem_status.dwLength = sizeof(mem_status);
+    if (GlobalMemoryStatusEx(&mem_status)) {
+        BOOST_LOG_TRIVIAL(warning) << "ImFontAtlasBuildWithStbTruetype: memory total_bytes=" 
+            << (size_t)mem_status.ullTotalPhys << ", available_bytes=" << (size_t)mem_status.ullAvailPhys;
+    }
+#endif
+    boost::log::core::get()->flush();
+    
+    atlas->TexPixelsAlpha8 = (unsigned char*)IM_ALLOC(alloc_bytes);
     memset(atlas->TexPixelsAlpha8, 0, atlas->TexWidth * atlas->TexHeight);
     spc.pixels = atlas->TexPixelsAlpha8;
     spc.height = atlas->TexHeight;

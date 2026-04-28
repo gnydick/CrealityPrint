@@ -514,6 +514,7 @@ public:
     struct CloneSettings
     {
         int clone_num = 1;
+        int focus_input_on_open_frames = -1;
     };
 
     struct OrientSettings

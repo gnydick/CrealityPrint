@@ -176,14 +176,14 @@ void HoverBorderIcon::OnMouseMove(wxMouseEvent& event)
 #ifdef __APPLE__
 void HoverBorderIcon::OnMouseEnter(wxMouseEvent& event)
 {
-    state_handler.set_state(9, 9);
+    state_handler.set_state(StateHandler::Hovered, StateHandler::Hovered);
     Refresh();
     event.Skip();
 }
 
 void HoverBorderIcon::OnMouseLeave(wxMouseEvent& event)
 {
-    state_handler.set_state(0, 9);
+    state_handler.set_state(0, StateHandler::Hovered);
     Refresh();
     event.Skip();
 }
@@ -244,6 +244,17 @@ ImgBtn ::~ImgBtn()
 
 }
 
+void ImgBtn::SetSelected(bool selected)
+{
+    state_handler.set_state(selected ? StateHandler::Checked : 0, StateHandler::Checked);
+    Refresh();
+}
+
+bool ImgBtn::IsSelected()
+{
+    return (GetState() & StateHandler::Checked) != 0;
+}
+
 void ImgBtn::render(wxDC& dc)
 {
     wxSize size = GetSize();
@@ -276,6 +287,7 @@ void ImgBtn::Create(wxWindow* parent, const wxString& text, const wxString& icon
 
     StaticBox::SetFont(Label::Body_13);
     StaticBox::SetBorderColor(StateColor(std::make_pair(parent->GetBackgroundColour(), (int) StateColor::Disabled),
+                                         std::make_pair(0x15BF59, (int) StateColor::Checked),
                                          std::make_pair(0x15BF59, (int) StateColor::Hovered),
                                          std::make_pair(parent->GetBackgroundColour(), (int) StateColor::Normal)));
     StaticBox::SetBackgroundColor(

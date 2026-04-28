@@ -602,7 +602,7 @@ private:
     // Support for the extrusion role markers. Which marker is active?
     ExtrusionRole                       m_last_extrusion_role;
     // To ignore gapfill role for retract_lift_enforce
-    ExtrusionRole                       m_last_notgapfill_extrusion_role;
+    ExtrusionRole                       m_last_notgapfill_extrusion_role{ erNone };
     // Support for G-Code Processor
     float                               m_last_height{ 0.0f };
     float                               m_last_layer_z{ 0.0f };
@@ -671,6 +671,8 @@ private:
     int get_bed_temperature(const int extruder_id, const bool is_first_layer, const BedType bed_type) const;
 
     std::string _extrude(const ExtrusionPath &path, std::string description = "", double speed = -1);
+    std::string set_wipe_tower_print_acceleration();
+    std::string inject_wipe_tower_print_acceleration(std::string tower_gcode);
     ExtrusionPaths set_speed_transition(ExtrusionPaths& paths);
     ExtrusionPaths split_and_mapping_speed(
         double& other_path_v, double& final_v, ExtrusionPath& this_path, double max_smooth_length, bool split_from_left = true);

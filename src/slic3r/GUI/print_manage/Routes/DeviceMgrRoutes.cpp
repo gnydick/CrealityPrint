@@ -20,6 +20,7 @@
 #include "slic3r/GUI/PhysicalPrinter.hpp"
 #include "slic3r/GUI/SystemId/SystemId.hpp"
 #include "libslic3r/Utils.hpp"
+#include <wx/weakref.h>
 #include <boost/log/trivial.hpp>
 
 using namespace Slic3r;
@@ -148,6 +149,7 @@ namespace DM {
 
         // web rtc local get 
         this->Handler({ "get_webrtc_local_param" }, [](wxWebView* browse, const std::string& data, nlohmann::json& json_data, const std::string cmd) {
+            wxWeakRef<wxWebView> weak_browse(browse);
 
             std::string url = json_data["url"].get<std::string>();
             std::string  sdp = json_data["sdp"].get<std::string>();
@@ -225,9 +227,20 @@ namespace DM {
                     videoEncryption = true;
                 }
 
-                std::string responseBody;
-                std::string responseError;
-                unsigned responseStatus = 0;
+                auto post_result = [weak_browse](nlohmann::json out_data) {
+                    nlohmann::json commandJson;
+                    commandJson["command"] = "get_webrtc_local_param";
+                    commandJson["data"] = std::move(out_data);
+                    auto strJS = commandJson.dump(-1, ' ', true);
+                    auto encodedJS = RemotePrint::Utils::url_encode(strJS);
+                    wxGetApp().CallAfter([weak_browse, encodedJS] {
+                        wxWebView* browse = weak_browse.get();
+                        if (browse == nullptr || browse->IsBeingDeleted())
+                            return;
+
+                        AppUtils::PostMsg(browse, wxString::Format("window.handleStudioCmd('%s');", encodedJS).ToStdString());
+                    });
+                };
 
                 if (videoEncryption) {
                     try {
@@ -239,45 +252,46 @@ namespace DM {
                             .ca_file(Slic3r::resources_dir() + "/cert/ca.crt")
                             .ssl_verify_peer(true)   //校验证书链
                             .ssl_verify_host(false)  //不校验域名
-                            .on_complete([&](std::string body, unsigned http_status) {
-                                responseBody = body;
-                                responseStatus = http_status;
+                            .on_complete([post_result, url, videoEncryption](std::string body, unsigned http_status) {
+                                nlohmann::json out_data;
+                                out_data["sdp"] = std::move(body);
+                                out_data["url"] = url;
+                                out_data["videoEncryption"] = videoEncryption;
+                                out_data["status"] = http_status;
+                                post_result(std::move(out_data));
                             })
-                            .on_error([&](std::string body, std::string error, unsigned http_status) {
-                                responseBody = body;
-                                responseError = error;
-                                responseStatus = http_status;
+                            .on_error([post_result, url, videoEncryption](std::string body, std::string error, unsigned http_status) {
+                                nlohmann::json out_data;
+                                if (!body.empty()) {
+                                    out_data["sdp"] = std::move(body);
+                                } else {
+                                    out_data["status"] = http_status;
+                                    out_data["error"] = std::move(error);
+                                }
+                                out_data["url"] = url;
+                                out_data["videoEncryption"] = videoEncryption;
+                                out_data["status"] = http_status;
+                                post_result(std::move(out_data));
                             })
-                            .perform_sync();
+                            .perform();
                     } catch (const std::exception& ex) {
-                        responseError = ex.what();
+                        nlohmann::json out_data;
+                        out_data["url"] = url;
+                        out_data["videoEncryption"] = videoEncryption;
+                        out_data["status"] = 0;
+                        out_data["error"] = ex.what();
+                        post_result(std::move(out_data));
                     }
+                    return true;
                 }
 
                 nlohmann::json out_data;
-                if (videoEncryption) {
-                    if (!responseBody.empty()) {
-                        out_data["sdp"] = responseBody;
-                    } else {
-                        out_data["status"] = responseStatus;
-                        out_data["error"] = responseError;
-                    }
-                } else {
-                    out_data["sdp"] = e;
-                }
+                out_data["sdp"] = e;
                 out_data["url"] = url;
                 out_data["videoEncryption"] = videoEncryption;
-                out_data["status"] = responseStatus;
+                out_data["status"] = 0;
+                post_result(std::move(out_data));
 
-                nlohmann::json commandJson;
-                commandJson["command"] = "get_webrtc_local_param";
-                commandJson["data"] = out_data;
-                auto strJS = commandJson.dump(-1, ' ', true);
-                auto encodedJS = RemotePrint::Utils::url_encode(strJS);
-                wxGetApp().CallAfter([browse, encodedJS]{
-                        AppUtils::PostMsg(browse, wxString::Format("window.handleStudioCmd('%s');", encodedJS).ToStdString());
-                            });
-                
                 return true;
             });
 

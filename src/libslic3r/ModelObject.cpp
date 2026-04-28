@@ -42,6 +42,8 @@ ModelObject& ModelObject::assign_copy(const ModelObject &rhs)
     this->module_name                 = rhs.module_name;
     this->input_file                  = rhs.input_file;
     this->from_loaded_id              = rhs.from_loaded_id;
+    // BBS: copy UUID from 3MF file
+    this->uuid                        = rhs.uuid;
     // Copies the config's ID
     this->config                      = rhs.config;
     assert(this->config.id() == rhs.config.id());
@@ -83,6 +85,8 @@ ModelObject& ModelObject::assign_copy(ModelObject &&rhs)
     this->module_name                 = std::move(rhs.module_name);
     this->input_file                  = std::move(rhs.input_file);
     this->from_loaded_id              = std::move(rhs.from_loaded_id);
+    // BBS: move UUID from 3MF file
+    this->uuid                        = std::move(rhs.uuid);
     // Moves the config's ID
     this->config                      = std::move(rhs.config);
     assert(this->config.id() == rhs.config.id());

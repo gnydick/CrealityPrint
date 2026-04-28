@@ -26,12 +26,13 @@ namespace Slic3r {
     namespace GUI {
 
         // 事件表
-wxBEGIN_EVENT_TABLE(LoginDialog, wxDialog) EVT_WEBVIEW_NAVIGATING(wxID_ANY, LoginDialog::OnWebViewNavigating)
-    EVT_WEBVIEW_NEWWINDOW(wxID_ANY, LoginDialog::OnWebViewNewWindow) EVT_WEBVIEW_LOADED(wxID_ANY, LoginDialog::OnWebViewLoaded)
-        EVT_WEBVIEW_ERROR(wxID_ANY, LoginDialog::OnWebViewError)
-    // EVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED(wxID_ANY, LoginDialog::OnWebViewScriptMessage)
-    // EVT_CLOSE_WINDOW(LoginDialog::OnClose)
-    wxEND_EVENT_TABLE()
+wxBEGIN_EVENT_TABLE(LoginDialog, wxDialog)
+    EVT_WEBVIEW_NAVIGATING(wxID_ANY, LoginDialog::OnWebViewNavigating)
+    EVT_WEBVIEW_NEWWINDOW(wxID_ANY, LoginDialog::OnWebViewNewWindow)
+    EVT_WEBVIEW_LOADED(wxID_ANY, LoginDialog::OnWebViewLoaded)
+    EVT_WEBVIEW_ERROR(wxID_ANY, LoginDialog::OnWebViewError)
+    EVT_CLOSE(LoginDialog::OnClose)
+wxEND_EVENT_TABLE()
 
         LoginDialog::LoginDialog(wxWindow* parent, const wxString& title)
     : DPIDialog(parent, wxID_ANY, title, wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
@@ -179,6 +180,11 @@ wxBEGIN_EVENT_TABLE(LoginDialog, wxDialog) EVT_WEBVIEW_NAVIGATING(wxID_ANY, Logi
                 });
             }
             // 静态文本不需同步 URL；点击事件直接读取 m_loginUrl
+        }
+
+        void LoginDialog::MarkLoginSucceeded()
+        {
+            m_login_succeeded = true;
         }
 
         wxString LoginDialog::GetLoginUrl()
@@ -380,6 +386,15 @@ wxBEGIN_EVENT_TABLE(LoginDialog, wxDialog) EVT_WEBVIEW_NAVIGATING(wxID_ANY, Logi
 
         void LoginDialog::OnClose(wxCloseEvent& evt)
         {
+            if (!m_login_succeeded && !m_close_event_sent) {
+                m_close_event_sent = true;
+                nlohmann::json event_json = {
+                    {"command", "login_dialog_event"},
+                    {"event", "close"}
+                };
+                wxString strJS = wxString::Format("window.handleStudioCmd(%s)", event_json.dump(-1, ' ', true, nlohmann::json::error_handler_t::ignore));
+                GUI::wxGetApp().run_script(strJS);
+            }
             evt.Skip();
         }
 

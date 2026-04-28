@@ -139,13 +139,44 @@ void MeshClipper::render_contour(const ColorRGBA& color, const std::vector<size_
         const Camera& camera = wxGetApp().plater()->get_camera();
         shader->set_uniform("view_model_matrix", camera.get_view_matrix());
         shader->set_uniform("projection_matrix", camera.get_projection_matrix());
+        glsafe(::glLineWidth(2.0f));
         for (size_t i=0; i<m_result->cut_islands.size(); ++i) {
             if (ignore_idxs && std::binary_search(ignore_idxs->begin(), ignore_idxs->end(), i))
                 continue;
-            CutIsland& isl = m_result->cut_islands[i];
-            isl.model_expanded.set_color(isl.disabled ? ColorRGBA(1.f, 0.f, 0.f, 1.f) : color);
-            isl.model_expanded.render();
+            const CutIsland& isl = m_result->cut_islands[i];
+            const ColorRGBA contour_color = isl.disabled ? ColorRGBA(1.f, 0.f, 0.f, 1.f) : color;
+            const Vec3d contour_offset = 0.002 * m_plane.get_normal().normalized();
+
+            auto render_loop = [&](const Polygon& polygon) {
+                if (polygon.size() < 2)
+                    return;
+
+                GLModel::Geometry init_data;
+                init_data.format = { GLModel::Geometry::EPrimitiveType::LineLoop, GLModel::Geometry::EVertexLayout::P3 };
+                init_data.reserve_vertices(polygon.size());
+                init_data.reserve_indices(polygon.size());
+
+                for (size_t pt_idx = 0; pt_idx < polygon.size(); ++pt_idx) {
+                    const Vec2d pt = unscale(polygon.points[pt_idx]);
+                    const Vec3d world_pt = m_result->trafo * Vec3d(pt.x(), pt.y(), m_result->height_mesh) + contour_offset;
+                    init_data.add_vertex(Vec3f(float(world_pt.x()), float(world_pt.y()), float(world_pt.z())));
+                    init_data.add_index(unsigned(pt_idx));
+                }
+
+                if (init_data.is_empty())
+                    return;
+
+                GLModel line_model;
+                line_model.init_from(std::move(init_data));
+                line_model.set_color(contour_color);
+                line_model.render();
+            };
+
+            render_loop(isl.expoly.contour);
+            for (const Polygon& hole : isl.expoly.holes)
+                render_loop(hole);
         }
+        glsafe(::glLineWidth(1.0f));
         shader->stop_using();
     }
 
@@ -210,7 +241,7 @@ std::vector<Vec3d> MeshClipper::point_per_contour() const {
         // If the above failed, just return the centroid, regardless of whether
         // it is inside the contour or in a hole (we must return something).
         Vec2d c = done ? p : unscale(isl.expoly.contour.centroid());
-        out.emplace_back(m_result->trafo * Vec3d(c.x(), c.y(), 0.));
+        out.emplace_back(m_result->trafo * Vec3d(c.x(), c.y(), m_result->height_mesh));
     }
     return out;
 }
@@ -223,6 +254,7 @@ void MeshClipper::recalculate_triangles()
     auto plane_mesh = Eigen::Hyperplane<double, 3>(m_plane.get_normal(), -m_plane.distance(Vec3d::Zero())).transform(m_trafo.get_matrix().inverse());
     const Vec3d up = plane_mesh.normal();
     const float height_mesh = -plane_mesh.offset();
+    m_result->height_mesh = height_mesh;
 
     // Now do the cutting
     MeshSlicingParams slicing_params;
@@ -397,7 +429,7 @@ void MeshClipper::recalculate_triangles()
         isl.expoly_bb = get_extents(isl.expoly);
 
         Point centroid_scaled = isl.expoly.contour.centroid();
-        Vec3d centroid_world = m_result->trafo * Vec3d(unscale(centroid_scaled).x(), unscale(centroid_scaled).y(), 0.);
+        Vec3d centroid_world = m_result->trafo * Vec3d(unscale(centroid_scaled).x(), unscale(centroid_scaled).y(), m_result->height_mesh);
         isl.hash = isl.expoly.contour.size() + size_t(std::abs(100.*centroid_world.x())) + size_t(std::abs(100.*centroid_world.y())) + size_t(std::abs(100.*centroid_world.z()));
     }
 

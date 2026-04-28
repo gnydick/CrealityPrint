@@ -2,6 +2,7 @@
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/Camera.hpp"
 #include "slic3r/GUI/Gizmos/GLGizmosCommon.hpp"
+#include "slic3r/GUI/AnalyticsDataUploadManager.hpp"
 
 #include <GL/glew.h>
 #include <imgui/imgui_internal.h>
@@ -277,6 +278,10 @@ bool GLGizmoHollow::gizmo_event(SLAGizmoEventType action, const Vec2d& mouse_pos
                 assert(m_selected.size() == mo->sla_drain_holes.size());
                 m_parent.set_as_dirty();
                 m_wait_for_up_event = true;
+                
+                // 【新增】标记几何体修改（添加孔洞成功）
+                AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+                    .mark_modified(AnalyticsDataUploadManager::ModelModifyType::ADD_HOLE);
             }
             else
                 return false;
@@ -698,6 +703,10 @@ void GLGizmoHollow::on_render_input_window(float x, float y, float bottom_limit)
 
            return sel_item;
        });
+       
+       // 【新增】标记几何体修改（抽壳操作完成即标记）
+       AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+           .mark_modified(AnalyticsDataUploadManager::ModelModifyType::HOLLOW);
 
       is_anime = true;
     }

@@ -414,7 +414,7 @@ public:
     PrinterDialog*         m_printer_dialog{ nullptr };
     //BBS
     SettingsDialog        m_settings_dialog;
-    DiffPresetDialog      diff_dialog;
+    std::unique_ptr<DiffPresetDialog> diff_dialog;
     wxWindow*             m_plater_page{ nullptr };
     PrintHostQueueDialog* m_printhost_queue_dlg;
 

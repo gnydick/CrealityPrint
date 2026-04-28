@@ -3038,6 +3038,8 @@ struct Plater::priv
     void on_export_began(wxCommandEvent&);
     void on_export_finished(wxCommandEvent&);
     void on_slicing_began();
+    // 【新增】阶段3：采集当前盘的切片信息并缓存
+    void cache_slice_info_for_current_plate();
     void restore_belt_transformation();
 
     void clear_warnings(int plate_index = PLATE_ALL_IDX);
@@ -3902,7 +3904,18 @@ Plater::priv::priv(Plater* q, MainFrame* main_frame)
             int skip_confirm = (policy == RestorePolicy::Discard) ? 1 : e.GetInt();
 
             // 保持原 silent=true
+#ifdef __APPLE__
+            // Skip new_project if models were already loaded via URL scheme
+            // On macOS, URL scheme launch causes race condition where model is loaded
+            // before EVT_RESTORE_PROJECT fires, so we must not clear it.
+            if (this->q->model().objects.empty()) {
+                this->q->new_project(skip_confirm, true);
+            } else {
+                BOOST_LOG_TRIVIAL(warning) << "EVT_RESTORE_PROJECT: skipping new_project, models already loaded via URL scheme, object count=" << this->q->model().objects.size();
+            }
+#else
             this->q->new_project(skip_confirm, true);
+#endif
 
             std::string res         = wxGetApp().app_config->get("is_first_install");
             bool        onlyDefault = wxGetApp().preset_bundle->printers.only_default_printers();
@@ -4428,7 +4441,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
     const float CENTER_AROUND_ORIGIN_RATIO = 0.8;
     const float LOAD_MODEL_RATIO           = 0.9;
 
-    wxGetApp().preset_bundle->project_config.erase("machine_is_belt");
+    wxGetApp().preset_bundle->clear_project_machine_is_belt();
 
     for (size_t i = 0; i < input_files.size(); ++i) {
         int file_percent = 0;
@@ -4996,10 +5009,11 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                                 config.set("single_extruder_multi_material_priming", false);
                             }
                         }
-                        if (config.has("flush_volumes_changed")) {
-                            config.set("flush_volumes_changed", true);
-                        } else {
-                            config.set_key_value("flush_volumes_changed", new ConfigOptionBool(true));
+                        // Keep the project value if provided by 3mf.
+                        // For legacy files with no key, treat it as "not manually changed"
+                        // so matrix can be auto-calculated from current filament colors.
+                        if (!config.has("flush_volumes_changed")) {
+                            config.set_key_value("flush_volumes_changed", new ConfigOptionBool(false));
                         }
 
                         PresetBundle* preset_bundle = wxGetApp().preset_bundle;
@@ -5097,15 +5111,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             }
 
 #if !AUTOMATION_TOOL || !AUTO_CONVERT_3MF
-                            std::promise<void> prom;
-                            std::future<void>  fut = prom.get_future();
-                            std::thread([this, &prom, &preset_bundle, &filename, &config, &file_version]() {
-                                preset_bundle->load_config_model(filename.string(), std::move(config), file_version, Check3mfVendor::getInstance()->isCreality3mf());
-                                prom.set_value();
-                            }).detach();
-                            while (fut.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready) {
-                                wxSafeYield();
-                            }
+                            preset_bundle->load_config_model(filename.string(), std::move(config), file_version, Check3mfVendor::getInstance()->isCreality3mf());
 #else
                             preset_bundle->load_config_model(filename.string(), std::move(config), file_version);
 #endif
@@ -5187,6 +5193,11 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             // to avoid black (default) colors for Extruders in the ObjectList,
                             // when for extruder colors are used filament colors
                             q->on_filaments_change(preset_bundle->filament_presets.size());
+                            ConfigOptionBool* flush_changed_opt =
+                                wxGetApp().preset_bundle->project_config.option<ConfigOptionBool>("flush_volumes_changed");
+                            if (flush_changed_opt && !flush_changed_opt->value) {
+                                Utils::calc_flushing_volumes();
+                            }
                             preset_bundle->update_filament_presets = true;
                             is_project_file = true;
 
@@ -6623,6 +6634,10 @@ void Plater::priv::split_object()
         for (size_t idx : idxs) {
             get_selection().add_object((unsigned int) idx, false);
         }
+        
+        // 【新增】标记几何体修改（拆分到对象成功）
+        AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+            .mark_modified(AnalyticsDataUploadManager::ModelModifyType::SPLIT_OBJECTS);
     }
 }
 
@@ -8435,6 +8450,10 @@ void Plater::priv::on_slicing_update(SlicingStatusEvent& evt)
 void Plater::priv::on_slicing_completed(wxCommandEvent& evt)
 {
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": event_type %1%, string %2%") % evt.GetEventType() % evt.GetString();
+    
+    // 【新增】阶段3：采集切片信息并缓存
+    cache_slice_info_for_current_plate();
+    
     // BBS: add slice project logic
     if (m_slice_all && (m_cur_slice_plate < (partplate_list.get_plate_count() - 1))) {
         BOOST_LOG_TRIVIAL(debug) << __FUNCTION__
@@ -8472,6 +8491,90 @@ void Plater::priv::on_export_finished(wxCommandEvent& evt)
         q->export_3mf(gcode_path.replace_extension(".3mf"), SaveStrategy::Silence); // BBS: silence
     }
 #endif
+}
+
+// ============================================================
+// 阶段3：采集当前盘的切片信息并缓存
+// ============================================================
+void Plater::priv::cache_slice_info_for_current_plate()
+{
+    if (this->printer_technology != ptFFF) {
+        // SLA 打印机暂不处理
+        return;
+    }
+    
+    int plate_idx = partplate_list.get_curr_plate()->get_index();
+    
+    // 1. 构建 printer_info JSON（使用 collect_params 的打印机参数部分）
+    nlohmann::json printer_info;
+    
+    // 获取完整的打印配置（包含所有默认值）
+    const Print& print = partplate_list.get_plate(plate_idx)->get_print();
+    const DynamicPrintConfig& full_config = print.full_print_config();
+    
+    nlohmann::json printer_params = AnalyticsDataUploadManager::ProjectModificationTracker::collect_params(full_config);
+    if (printer_params.contains("device_model")) {
+        printer_info["device_model"] = printer_params["device_model"];
+    }
+    if (printer_params.contains("nozzle_diameter")) {
+        printer_info["nozzle_diameter"] = printer_params["nozzle_diameter"];
+    }
+    // firmware_version - 固件版本（暂不采集，需要连接打印机后从硬件获取）
+    // printer_info["firmware_version"] = "";  // 留空
+    
+    // 2. 构建 slice_param JSON（使用 full_config 采集所有参数，包括默认值）
+    nlohmann::json slice_param;
+    nlohmann::json global_param = printer_params;  // 已经是全量参数
+    
+    // 注意：参数采集已重构到 AnalyticsDataUploadManager::ProjectModificationTracker::collect_params()
+    // global_param 由 collect_params() 统一采集，无需重复代码
+    
+    // 阶段4：采集对象/部件修改参数（只采集当前盘的对象）
+    PartPlate* current_plate = partplate_list.get_plate(plate_idx);
+    nlohmann::json obj_list = AnalyticsDataUploadManager::ProjectModificationTracker::collect_obj_params(current_plate, plate_idx);
+    
+    // 组装 slice_param
+    slice_param["global_param"] = global_param;
+    slice_param["obj_list"] = obj_list;  // 阶段4实现
+    
+    // 3. 构建 filament_info JSON（从 global_param 提取）
+    nlohmann::json filament_info;
+    if (global_param.contains("filament_type")) {
+        filament_info["filament_type"] = global_param["filament_type"];
+    }
+    if (global_param.contains("filament_vendor")) {
+        filament_info["filament_brand"] = global_param["filament_vendor"];
+    }
+    
+    // 4. 缓存到 Tracker（包含 filament_info）
+    AnalyticsDataUploadManager::ProjectModificationTracker::getInstance().cache_slice_info(
+        plate_idx,
+        printer_info.dump(),
+        slice_param.dump(),
+        filament_info.dump()
+    );
+    
+    // 【调试日志】打印完整的 slice_param（WARNING级别，方便对比测试）
+    BOOST_LOG_TRIVIAL(warning) << "[SliceInfo-Debug] ========== Plate " << plate_idx << " ==========";
+    BOOST_LOG_TRIVIAL(warning) << "[SliceInfo-Debug] printer_info: " << printer_info.dump(2);
+    BOOST_LOG_TRIVIAL(warning) << "[SliceInfo-Debug] slice_param (full): " << slice_param.dump(2);
+    BOOST_LOG_TRIVIAL(warning) << "[SliceInfo-Debug] obj_list count: " << obj_list.size();
+    
+    // 打印 obj_list 摘要
+    if (!obj_list.empty()) {
+        for (size_t i = 0; i < obj_list.size(); ++i) {
+            const auto& obj = obj_list[i];
+            std::string summary = "[SliceInfo-Debug]   obj[" + std::to_string(i) + "] obj_id=" + obj.value("obj_id", "N/A");
+            if (obj.contains("obj_param")) {
+                summary += " | obj_param keys=" + std::to_string(obj["obj_param"].size());
+            }
+            if (obj.contains("parts")) {
+                summary += " | parts count=" + std::to_string(obj["parts"].size());
+            }
+            BOOST_LOG_TRIVIAL(warning) << summary;
+        }
+    }
+    BOOST_LOG_TRIVIAL(warning) << "[SliceInfo-Debug] =========================================";
 }
 
 void Plater::priv::on_slicing_began()
@@ -11373,7 +11476,7 @@ int Plater::new_project(bool skip_confirm, bool silent, const wxString& project_
     payload.type = AnalyticsDataEventType::ANALYTICS_FILE_PROJECT_NEW;
     AnalyticsDataUploadManager::getInstance().triggerUploadTasksWithPayload(payload);
 
-    wxGetApp().preset_bundle->project_config.erase("machine_is_belt");
+    wxGetApp().preset_bundle->clear_project_machine_is_belt();
     wxGetApp().clear_cloud_model_download();
     bool transfer_preset_changes = false;
     // BBS: save confirm
@@ -12117,9 +12220,21 @@ void Plater::import_model_id(wxString download_info)
         }
 
         // show save new project
+        BOOST_LOG_TRIVIAL(warning) << "[Debug] load_files target_path: " << target_path.string() << ", extension: " << target_path.extension().string();
         if (target_path.extension() == ".3mf") {
             p->set_project_filename(target_path.wstring());
             p->notification_manager->push_import_finished_notification(target_path.string(), target_path.parent_path().string(), false);
+            
+            // 计算并设置 model_id（使用文件 MD5 指纹）
+            auto& analytics_mgr = GUI::AnalyticsDataUploadManager::getInstance();
+            std::string model_id = analytics_mgr.computeModelFingerprint(target_path.string());
+            analytics_mgr.mark_analytics_project_info(
+                target_path.string(),  // full_url
+                model_id,              // model_id
+                "",                    // file_id (暂不使用)
+                "3mf",                 // file_format
+                target_path.filename().string()  // name
+            );
         }
 
         AnalyticsDataUploadManager::getInstance().set_analytics_project_info_valid(true);
@@ -13643,7 +13758,7 @@ void Plater::load_gcode(const wxString& filename)
     }
 
     auto machine_is_belt = current_result->machine_is_belt;
-    wxGetApp().preset_bundle->project_config.set_key_value("machine_is_belt", new ConfigOptionBool(machine_is_belt));
+    wxGetApp().preset_bundle->set_project_machine_is_belt(machine_is_belt);
 
     // set belt_Z_offset to project config
     auto belt_z_offset = current_result->belt_z_offset;
@@ -13861,6 +13976,36 @@ std::vector<size_t> Plater::load_files(const std::vector<fs::path>& input_files,
     p->m_slice_all_only_has_gcode = false;
     // BBS: wish to reset all plates stats item selected state when load a new file
     p->preview->get_canvas3d()->reset_select_plate_toolbar_selection();
+    
+    // 【新增】加载新文件时复位几何体修改标记
+    try {
+        AnalyticsDataUploadManager::ProjectModificationTracker::getInstance().reset();
+        BOOST_LOG_TRIVIAL(debug) << "[Modification] Reset modification tracker for new file load";
+    } catch (const std::exception& e) {
+        BOOST_LOG_TRIVIAL(warning) << "[Modification] Failed to reset modification tracker: " << e.what();
+    }
+    
+    // 【新增】异步计算3MF文件指纹（不阻塞UI）
+    for (const auto& file_path : input_files) {
+        if (file_path.extension() == ".3mf") {
+            try {
+                // 【统一】所有3MF文件导入的必经之路：计算指纹并赋值
+                auto& analytics_mgr = GUI::AnalyticsDataUploadManager::getInstance();
+                std::string model_id = analytics_mgr.computeModelFingerprint(file_path.string());
+                analytics_mgr.mark_analytics_project_info(
+                    file_path.string(),                    // full_url
+                    model_id,                             // model_id
+                    "",                                  // file_id (暂不使用)
+                    "3mf",                               // file_format
+                    file_path.filename().string()        // name
+                );
+                BOOST_LOG_TRIVIAL(warning) << "[AnalyticsProjectInfo] load_files: model_id=" << model_id;
+            } catch (const std::exception& e) {
+                BOOST_LOG_TRIVIAL(warning) << "[AnalyticsProjectInfo] Failed to compute model_id for " << file_path << ": " << e.what();
+            }
+        }
+    }
+    
     return p->load_files(input_files, strategy, ask_multi);
 }
 
@@ -16016,27 +16161,43 @@ void Plater::export_stl(bool extended, bool selection_only, bool multi_stls)
     bool  exist_negive_volume = false;
     bool  export_with_boolean = false;
 
-    if (selection_only && !selection.is_multiple_full_object()) {
-        const auto obj_idx = selection.get_object_idx();
-        if (obj_idx == -1 ||selection.is_wipe_tower())
-            return;
-        // only support selection single full object
-        if (!selection.is_single_full_object())
-            return;
-        const ModelObject *cur_model_object = p->model.objects[obj_idx];
-        for (auto v : cur_model_object->volumes) {
-            if (v->type() == ModelVolumeType::NEGATIVE_VOLUME) {
-                exist_negive_volume = true;
-                break;
-            }
+    auto object_has_negative_volume = [](const ModelObject* model_object) {
+        for (const auto* volume : model_object->volumes) {
+            if (volume->type() == ModelVolumeType::NEGATIVE_VOLUME)
+                return true;
         }
-    } else {//support mulitiple full object// from file mene to export
-        for (auto cur_model_object : p->model.objects) {
-            for (auto v : cur_model_object->volumes) {
-                if (v->type() == ModelVolumeType::NEGATIVE_VOLUME) {
+        return false;
+    };
+
+    if (selection_only) {
+        if (selection.is_multiple_full_object()) {
+            std::set<int> selected_object_idxs;
+            const auto&   instance_idxs = selection.get_selected_object_instances();
+            for (const auto& instance_idx : instance_idxs)
+                selected_object_idxs.insert(instance_idx.first);
+
+            for (const int obj_idx : selected_object_idxs) {
+                if (obj_idx >= 0 && obj_idx < static_cast<int>(p->model.objects.size()) &&
+                    object_has_negative_volume(p->model.objects[obj_idx])) {
                     exist_negive_volume = true;
                     break;
                 }
+            }
+        } else {
+            const auto obj_idx = selection.get_object_idx();
+            if (obj_idx == -1 || selection.is_wipe_tower())
+                return;
+            // only support selection single full object
+            if (!selection.is_single_full_object())
+                return;
+
+            exist_negive_volume = object_has_negative_volume(p->model.objects[obj_idx]);
+        }
+    } else { // support full-model export from file menu
+        for (const auto* cur_model_object : p->model.objects) {
+            if (object_has_negative_volume(cur_model_object)) {
+                exist_negive_volume = true;
+                break;
             }
         }
     }

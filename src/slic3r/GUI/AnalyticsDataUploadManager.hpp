@@ -4,10 +4,17 @@
 #include <functional>
 #include <mutex>
 #include <condition_variable>
+#include <unordered_map>
+#include <map>
+#include <future>
+#include <string>
 #include "nlohmann/json.hpp"
+#include "libslic3r/PrintConfig.hpp"
 
 namespace Slic3r {
 namespace GUI {
+
+class PartPlate;  // 前置声明
 
 // when to upload analytics data
 enum class AnalyticsUploadTiming {
@@ -139,11 +146,200 @@ public:
 
     static void uploadSlice822ClickEvent(const std::string& module, int id=1);
 
+    // ============================================================
+    // 创想云神策埋点上报接口（新系统 - 独立区域）
+    // 与原有的 Firebase Analytics 上报到不同的服务器地址
+    // ============================================================
+    
+    /**
+     * @brief 测试与服务器的连接性
+     * 
+     * @return true 如果连接成功
+     * @note 仅用于调试，检查是否能连接到创想云服务器
+     */
+    static bool test_sensors_connection();
+    
+    /**
+     * @brief 发送打印开始事件（print_001）到创想云
+     * 
+     * @param data 业务数据 JSON 对象（包含 task_id, model_id, plate_idx 等）
+     * @note 自动获取所有必需参数并转换为神策 SDK 格式发送到对应服务器
+     */
+    void send_print_begin_event(const nlohmann::json& data = nlohmann::json());
+    
+    /**
+     * @brief 发送神策埋点数据到创想云服务器（通用接口）
+     * 
+     * @param payload 完整的埋点数据 JSON 对象（由调用方封装好）
+     * @note 会自动根据版本和地区选择正确的上报地址
+     */
+    void send_sensors_payload_to_creality(const nlohmann::json& payload);
+
+    // ============================================================
+    // 3MF文件指纹管理
+    // ============================================================
+    
+    /**
+     * @brief 计算3MF文件指纹（同步）
+     * @param file_path 3MF文件路径
+     * @return MD5指纹字符串（32位十六进制）
+     */
+    std::string computeModelFingerprint(const std::string& file_path);
+
+    /**
+     * @brief 计算3MF文件指纹（异步）
+     * @param file_path 3MF文件路径
+     * @return future，可用于获取计算结果
+     */
+    std::future<std::string> computeModelFingerprintAsync(const std::string& file_path);
+
+    /**
+     * @brief 获取已缓存的指纹
+     * @param file_path 3MF文件路径
+     * @return 指纹字符串，如果未计算过返回空字符串
+     */
+    std::string getCachedFingerprint(const std::string& file_path);
+
+    /**
+     * @brief 清除所有指纹缓存
+     */
+    void clearFingerprintCache();
+
+    // ============================================================
+    // 项目几何体修改追踪（黑名单法）
+    // ============================================================
+    
+    /**
+     * @brief 几何体修改类型枚举（黑名单操作）
+     */
+    enum class ModelModifyType {
+        REPAIR,              // 修复模型
+        SIMPLIFY,            // 简化模型
+        HOLLOW,              // 抽壳
+        ADD_HOLE,            // 打洞
+        CUT,                 // 剪切
+        BOOLEAN,             // 布尔操作
+        EMBOSS,              // 浮雕
+        VARIABLE_LAYER,      // 可变层高
+        SUPPORT_PAINT,       // 支撑绘制
+        ZSEAM_PAINT,         // Z缝绘制
+        SPLIT_OBJECTS,       // 分割为对象
+        SPLIT_PARTS,         // 分割为部件
+        ADD_PART,            // 添加部件
+        DELETE_PART,         // 删除部件
+        HEIGHT_RANGE         // 高度范围修改
+    };
+
+    /**
+     * @brief 项目几何体修改追踪器（全局单例）
+     * 
+     * 功能：
+     * - 追踪项目是否被本质修改（几何体改变）
+     * - 使用黑名单法：只有黑名单操作才会标记
+     * - 每次导入新3MF时自动复位
+     * - 阶段3：缓存切片信息（printer_info, slice_param）
+     * - 按盘索引存储，每个盘独立缓存
+     * - 包含切片参数采集功能（低侵入式设计）
+     */
+    class ProjectModificationTracker {
+    public:
+        // ============================================================
+        // 参数采集功能
+        // ============================================================
+        
+        // 参数类型枚举
+        enum class ParamType {
+            Float, FloatFirst, Int, IntFirst, Bool, BoolFirst,
+            String, StringFirst, StringMulti, Percent, PercentFirst,
+            FloatOrPercent, FloatOrPercentFirst, Enum
+        };
+
+        // 参数定义结构
+        struct ParamDef {
+            const char* config_key;
+            const char* output_key;
+            ParamType type;
+        };
+
+        // 采集参数（静态方法，供外部调用）
+        // @param config DynamicPrintConfig引用
+        // @return 采集到的参数JSON
+        static nlohmann::json collect_params(const DynamicPrintConfig& config);
+
+        // 采集对象/部件修改参数（阶段4新增）
+        // @param plate PartPlate指针（用于获取当前盘的对象）
+        // @param plate_idx 盘索引（用于日志）
+        // @return obj_list JSON数组
+        static nlohmann::json collect_obj_params(PartPlate* plate, int plate_idx);
+
+    private:
+        // 内部辅助函数
+        static void add_param(const DynamicPrintConfig& config,
+                              nlohmann::json& output,
+                              const char* config_key, 
+                              const char* output_key, 
+                              ParamType type);
+        static void collect_printer_params(const DynamicPrintConfig& config, nlohmann::json& output);
+        static void collect_filament_params(const DynamicPrintConfig& config, nlohmann::json& output);
+        static void collect_process_params(const DynamicPrintConfig& config, nlohmann::json& output);
+
+        // 参数定义表
+        static const ParamDef s_printer_params[];
+        static constexpr size_t s_printer_params_count = 5;
+        static const ParamDef s_filament_params[];
+        static constexpr size_t s_filament_params_count = 52;
+        static const ParamDef s_process_params[];
+        static constexpr size_t s_process_params_count = 119;
+
+    private:
+        bool m_is_modified = false;
+        std::vector<ModelModifyType> m_modify_history;
+        mutable std::mutex m_mutex;
+        
+        // 阶段3：切片信息缓存（按盘索引存储）
+        std::map<int, std::string> m_printer_info;   // key=盘索引, value=JSON字符串
+        std::map<int, std::string> m_slice_param;    // key=盘索引, value=JSON字符串
+        std::map<int, std::string> m_filament_info;  // key=盘索引, value=JSON字符串
+        
+    public:
+        static ProjectModificationTracker& getInstance();
+        
+        // 阶段2：标记修改（操作成功后调用）
+        void mark_modified(ModelModifyType type);
+        
+        // 阶段2：查询是否被修改
+        bool is_essentially_modified() const;
+        
+        // 阶段2+3：复位（导入新3MF时调用，清除所有状态）
+        void reset();
+        
+        // 阶段2：获取修改历史（调试用）
+        const std::vector<ModelModifyType>& get_history() const;
+        
+        // 阶段3：缓存切片信息（按盘索引）
+        void cache_slice_info(int plate_idx, 
+                              const std::string& printer_info,
+                              const std::string& slice_param,
+                              const std::string& filament_info);
+        
+        // 阶段3：获取已缓存的切片信息
+        std::string get_printer_info(int plate_idx) const;
+        std::string get_slice_param(int plate_idx) const;
+        std::string get_filament_info(int plate_idx) const;
+    };
+
 private:
     AnalyticsDataUploadManager();
-
+    
     AnalyticsDataUploadManager(const AnalyticsDataUploadManager&)            = delete;
     AnalyticsDataUploadManager& operator=(const AnalyticsDataUploadManager&) = delete;
+    
+    // 初始化环境和地区配置（仅在首次调用时执行一次）
+    void init_sensors_config_if_needed();
+    
+    // 缓存的配置信息
+    bool m_sensors_config_initialized = false;
+    std::string m_sensors_upload_url;
 
     void processUploadData(AnalyticsDataEventType dataEventType, int plate_idx, const std::string& device_mac);
 
@@ -200,6 +396,13 @@ private:
 
 private:
     AnalyticsProjectInfo m_analytics_project_info;
+
+    // 指纹缓存：文件路径 -> 指纹
+    std::unordered_map<std::string, std::string> m_fingerprint_cache;
+    mutable std::mutex m_fingerprint_mutex;
+
+    // 底层MD5计算函数
+    std::string computeMD5(const std::string& file_path, size_t chunk_size = 1024 * 1024);
 
 };
 

@@ -277,6 +277,70 @@ std::string GCodeWriter::set_chamber_temperature(int temperature, bool wait)
     return gcode.str();
 }
 
+std::string GCodeWriter::set_print_acceleration(unsigned int acceleration)
+{
+    return set_acceleration_internal(Acceleration::Print, acceleration);
+}
+
+std::string GCodeWriter::set_travel_acceleration(unsigned int acceleration)
+{
+    m_travel_acceleration = acceleration;
+    return set_acceleration_internal(Acceleration::Travel, acceleration);
+}
+
+std::string GCodeWriter::set_travel_acceleration()
+{
+    if (m_suppress_auto_travel_acceleration)
+        return std::string();
+
+    unsigned int acceleration = 0;
+
+    if (m_has_auto_travel_acceleration_override) {
+        acceleration = m_auto_travel_acceleration_override;
+    } else if (m_is_first_layer && !m_first_layer_travel_accelerations.empty()) {
+        size_t extruder_id = m_extruder ? m_extruder->id() : 0;
+        if (extruder_id < m_first_layer_travel_accelerations.size()) {
+            acceleration = m_first_layer_travel_accelerations[extruder_id];
+        } else {
+            acceleration = m_first_layer_travel_accelerations[0];
+        }
+    } else {
+        acceleration = m_travel_acceleration;
+    }
+
+    if (acceleration == 0)
+        return std::string();
+
+    return set_acceleration_internal(Acceleration::Travel, acceleration);
+}
+void GCodeWriter::set_first_layer_travel_acceleration(const std::vector<unsigned int> &travel_accelerations)
+{
+    m_first_layer_travel_accelerations = travel_accelerations;
+}
+
+void GCodeWriter::set_first_layer(bool is_first_layer)
+{
+    m_is_first_layer = is_first_layer;
+}
+
+void GCodeWriter::set_auto_travel_acceleration_override(unsigned int acceleration)
+{
+    m_travel_acceleration = acceleration;
+    m_auto_travel_acceleration_override = acceleration;
+    m_has_auto_travel_acceleration_override = true;
+}
+
+void GCodeWriter::clear_auto_travel_acceleration_override()
+{
+    m_has_auto_travel_acceleration_override = false;
+    m_auto_travel_acceleration_override = 0;
+}
+
+void GCodeWriter::set_auto_travel_acceleration_suppressed(bool suppressed)
+{
+    m_suppress_auto_travel_acceleration = suppressed;
+}
+
 // copied from PrusaSlicer
 std::string GCodeWriter::set_acceleration_internal(Acceleration type, unsigned int acceleration)
 {
@@ -290,9 +354,13 @@ std::string GCodeWriter::set_acceleration_internal(Acceleration type, unsigned i
     bool separate_travel = (type == Acceleration::Travel && supports_separate_travel_acceleration(this->config.gcode_flavor));
 
     auto& last_value = separate_travel ? m_last_travel_acceleration : m_last_acceleration ;
-    if ((acceleration == 0 || acceleration == last_value) && m_last_dec == this->config.accel_to_decel_factor)
+    if ((acceleration == 0 || acceleration == last_value) && m_last_dec == this->config.accel_to_decel_factor && !m_is_first_layer)
         return std::string();
-    
+
+    if (acceleration == m_last_acceleration)
+        return std::string();
+    m_last_acceleration = acceleration;
+
     last_value = acceleration;
     m_last_dec = this->config.accel_to_decel_factor;
     
@@ -518,7 +586,7 @@ std::string GCodeWriter::travel_to_xy(const Vec2d &point, const std::string &com
     w.emit_f(speed * 60.0);
     //BBS
     w.emit_comment(GCodeWriter::full_gcode_comment, comment);
-    return w.string();
+    return set_travel_acceleration() + w.string();
 }
 
 std::string GCodeWriter::travel_to_xyz(const Vec3d &point, const std::string &comment,const double limitSpeed)
@@ -618,7 +686,7 @@ std::string GCodeWriter::travel_to_xyz(const Vec3d &point, const std::string &co
         }
         m_pos = dest_point;
         this->set_current_position_clear(true);
-        return slop_move + xy_z_move;
+        return set_travel_acceleration() + slop_move + xy_z_move;
     }
     else if (!this->will_move_z(point(2))) {
         double nominal_z = m_pos(2) - m_lifted;
@@ -663,7 +731,7 @@ std::string GCodeWriter::travel_to_xyz(const Vec3d &point, const std::string &co
 
     m_pos = dest_point;
     this->set_current_position_clear(true);
-    return out_string;
+    return set_travel_acceleration() + out_string;
 }
 
 std::string GCodeWriter::travel_to_z(double z, const std::string &comment,const double limitSpeed)
@@ -682,7 +750,7 @@ std::string GCodeWriter::travel_to_z(double z, const std::string &comment,const 
     /*  In all the other cases, we perform an actual Z move and cancel
         the lift. */
     m_lifted = 0;
-    return this->_travel_to_z(z, comment, limitSpeed);
+    return set_travel_acceleration() + this->_travel_to_z(z, comment, limitSpeed);
 }
 
 std::string GCodeWriter::_travel_to_z(double z, const std::string &comment,const double limitSpeed)
@@ -706,7 +774,7 @@ std::string GCodeWriter::_travel_to_z(double z, const std::string &comment,const
     w.emit_f(speed * 60.0);
     //BBS
     w.emit_comment(GCodeWriter::full_gcode_comment, comment);
-    return w.string();
+    return set_travel_acceleration() + w.string();
 }
 
 std::string GCodeWriter::_spiral_travel_to_z(double z, const Vec2d &ij_offset, const std::string &comment, const double limitSpeed)

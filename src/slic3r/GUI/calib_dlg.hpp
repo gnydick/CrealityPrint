@@ -13,6 +13,7 @@
 #include "GUI_App.hpp"
 #include "wx/hyperlink.h"
 #include <wx/radiobox.h>
+#include <array>
 #include "libslic3r/calib.hpp"
 
 class ImgBtn;
@@ -180,6 +181,7 @@ public:
     void on_dpi_changed(const wxRect& suggested_rect) override;
 
 protected:
+    void         set_selected_option(int index);
     Calib_Params m_params;
     ImgBtn*      m_btn0 = nullptr;
     ImgBtn*      m_btn1 = nullptr;
@@ -190,11 +192,13 @@ protected:
     ImgBtn*      m_btn6 = nullptr;
     ImgBtn*      m_btn7 = nullptr;
     ImgBtn*      m_btn8 = nullptr;
+    std::array<ImgBtn*, 9> m_option_buttons{};
     //Button*      m_btn8;
     Plater*      m_plater;
 
 private:
-    float m_CurrentValue = 0.8f;
+    int   m_selected_index = 0;
+    float m_CurrentValue   = 0.8f;
 };
 
 class Limit_Speed_Dlg : public DPIDialog

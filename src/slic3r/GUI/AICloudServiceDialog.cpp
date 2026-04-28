@@ -1717,7 +1717,7 @@ int AICloudService::doSave3mf()
     std::promise<void> prom;
     std::future<void>  fut = prom.get_future();
     wxGetApp().CallAfter([this, &prom]() {
-        wxGetApp().plater()->export_3mf(m_3mfPath, SaveStrategy::SplitModel | SaveStrategy::ShareMesh | SaveStrategy::FullPathSources /*SaveStrategy::Backup*/);
+        wxGetApp().plater()->export_3mf(m_3mfPath, SaveStrategy::Silence | SaveStrategy::SplitModel | SaveStrategy::ShareMesh | SaveStrategy::FullPathSources /*SaveStrategy::Backup*/);
         prom.set_value();
     });
     while (fut.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {

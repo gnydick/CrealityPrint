@@ -64,6 +64,8 @@ public:
            const wxSize&   size  = wxDefaultSize,
            long            style = 0);
     ~ImgBtn();
+    void SetSelected(bool selected);
+    bool IsSelected();
 
 protected:
     void render(wxDC& dc) override;

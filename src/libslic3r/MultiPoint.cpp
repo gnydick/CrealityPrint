@@ -1,5 +1,6 @@
 #include "MultiPoint.hpp"
 #include "BoundingBox.hpp"
+#include <limits>
 
 namespace Slic3r {
 
@@ -385,6 +386,46 @@ Points MultiPoint::concave_hull_2d(const Points& pts, const double tolerence)
     return hull;
 }
 
+
+
+// Orca: Distancing function used by IOI wall ordering algorithm for arachne.
+/**
+ * @brief Calculates the squared distance between a point and a line segment defined by two points.
+ */
+double MultiPoint::squaredDistanceToLineSegment(const Point& p, const Point& v, const Point& w)
+{
+    double l2 = (v - w).squaredNorm();
+    if (l2 == 0.0)
+        return (p - v).squaredNorm();
+    double t = std::max(0.0, std::min(1.0, ((p - v).dot(w - v)) / l2));
+    Point projection{ v.x() + t * (w.x() - v.x()), v.y() + t * (w.y() - v.y()) };
+    return (p - projection).squaredNorm();
+}
+
+// Orca: Distancing function used by IOI wall ordering algorithm for arachne.
+/**
+ * @brief Calculates the minimum distance between two lines defined by sets of points.
+ */
+double MultiPoint::minimumDistanceBetweenLinesDefinedByPoints(const Points& A, const Points& B)
+{
+    double min_distance = std::numeric_limits<double>::infinity();
+
+    for (size_t i = 0; i + 1 < A.size(); ++i) {
+        for (const auto& b : B) {
+            double distance = squaredDistanceToLineSegment(b, A[i], A[i + 1]);
+            min_distance = std::min(min_distance, std::sqrt(distance));
+        }
+    }
+
+    for (size_t i = 0; i + 1 < B.size(); ++i) {
+        for (const auto& a : A) {
+            double distance = squaredDistanceToLineSegment(a, B[i], B[i + 1]);
+            min_distance = std::min(min_distance, std::sqrt(distance));
+        }
+    }
+
+    return min_distance;
+}
 
 void MultiPoint3::translate(double x, double y)
 {

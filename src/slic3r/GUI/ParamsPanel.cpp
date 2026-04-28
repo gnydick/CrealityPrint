@@ -523,7 +523,7 @@ ParamsPanel::ParamsPanel( wxWindow* parent, wxWindowID id, const wxPoint& pos, c
 
         m_compare_btn =  new  HoverBorderIcon(m_top_panel, wxEmptyString, is_dark ? "compare_dark_default" : "compare_light_default", wxDefaultPosition, wxSize(FromDIP(24), FromDIP(24)), wxTE_PROCESS_ENTER);
         m_compare_btn->SetToolTip(_L("Compare presets"));
-        m_compare_btn->Bind(wxEVT_LEFT_DOWN, ([this](auto& e) { wxGetApp().mainframe->diff_dialog.show(); }));
+        m_compare_btn->Bind(wxEVT_LEFT_DOWN, ([this](auto& e) { wxGetApp().mainframe->diff_dialog->show(); }));
 
         // m_setting_btn = new HoverBorderIcon(m_top_panel, wxID_ANY, "table", wxEmptyString, wxDefaultSize, wxDefaultPosition, wxBU_EXACTFIT | wxNO_BORDER, true, 16, true, wxSize(10, 10));
         m_setting_btn = new  HoverBorderIcon(m_top_panel, wxEmptyString, is_dark ? "table_new" : "table_new_dark", wxDefaultPosition, wxSize(FromDIP(24), FromDIP(24)), wxTE_PROCESS_ENTER);

@@ -1700,9 +1700,17 @@ static void increase_areas_one_layer(
              *  layer z-1:dddddxxxxxxxxxx
              *  For more detailed visualisation see calculateWallRestrictions
              */
-            const coord_t safe_movement_distance =
+            coord_t safe_movement_distance =
                 (elem.use_min_xy_dist ? config.xy_min_distance : config.xy_distance) +
                 (std::min(config.z_distance_top_layers, config.z_distance_bottom_layers) > 0 ? config.min_feature_size : 0);
+
+            //有时候用户会设置xy距离为0，顶部距离为0，这时候safe_movement_distance=0，下面的代码就会发生除0错误
+            //见bug https://zentao.creality.com/zentao/bug-view-15207.html
+            if (safe_movement_distance == 0)
+            {
+                safe_movement_distance = config.min_feature_size;
+            }
+
             if (ceiled_parent_radius == volumes.ceilRadius(projected_radius_increased, parent.state.use_min_xy_dist) ||
                 projected_radius_increased < config.increase_radius_until_radius)
                 // If it is guaranteed possible to increase the radius, the maximum movement speed can be increased, as it is assumed that the maximum movement speed is the one of the slower moving wall
@@ -4643,8 +4651,14 @@ void organic_draw_branches(
             }
         }, tbb::simple_partitioner());
 
-    if (has_support_out_of_bed) {
+    //https://zentao.creality.com/zentao/bug-view-14157.html
+    if (has_support_out_of_bed) 
+    {
         print_object.set_has_support_outside(true);
+    }
+    else
+    {
+        print_object.set_has_support_outside(false);
     }
 
 

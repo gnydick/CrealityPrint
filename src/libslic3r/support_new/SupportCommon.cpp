@@ -406,7 +406,7 @@ SupportGeneratorLayersPtr generate_raft_base(
         }
     }
 
-    if (object.print()) {
+   /* if (object.print()) {
         Polygons bed_shape_polygons;
         const auto& pa = object.print()->config().printable_area.values;
         if (!pa.empty()) {
@@ -437,7 +437,7 @@ SupportGeneratorLayersPtr generate_raft_base(
                 }
             }
         }
-    }
+    }*/
 
 
     return raft_layers;

@@ -263,6 +263,7 @@ void ModelDownloader::start_download_3mf_group(const std::string& full_url,
             return;
 
         // locate entry; if not found, it was likely cancelled — skip import
+
         bool found = false;
         for (auto &file : cache_json_["3mfs"]) {
             try {
@@ -285,12 +286,9 @@ void ModelDownloader::start_download_3mf_group(const std::string& full_url,
 
         if (!found) return;
 
-        // Auto-import: trigger import of the downloaded 3MF file.
-        try {
-            wxGetApp().request_model_download(wxString::FromUTF8(path.c_str()));
-        } catch (...) {
-            // swallow exceptions to avoid breaking the downloader flow
-        }
+        // Auto-import is now driven by CloudDownloadProgressDialog::on_timer
+        // after the download dialog has fully closed, to avoid two progress
+        // dialogs appearing simultaneously. Do not call request_model_download here.
     };
 
     BOOST_LOG_TRIVIAL(debug) << "started download";

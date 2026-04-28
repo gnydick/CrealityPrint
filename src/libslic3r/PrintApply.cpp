@@ -895,8 +895,13 @@ void update_volume_bboxes(
                 } else
                     if(model_volume->get_convex_hull().empty())
                     {
-                        layer_range.volumes.push_back({model_volume->id(), transformed_its_bbox2d(model_volume->mesh().its,
-                                                          trafo_for_bbox(object_trafo, model_volume->get_matrix()), offset)});
+                        // Convex hull is empty when mesh.facets_count() <= 1 (set in ModelVolume constructor).
+                        // In this case mesh.its.indices is also empty, so skip to avoid null-deref crash
+                        // in transformed_its_bbox2d(). This volume will be re-evaluated on the next
+                        // background-process update once the mesh is fully initialized.
+                        if (!model_volume->mesh().its.indices.empty())
+                            layer_range.volumes.push_back({model_volume->id(), transformed_its_bbox2d(model_volume->mesh().its,
+                                                              trafo_for_bbox(object_trafo, model_volume->get_matrix()), offset)});
                     }else{
                         layer_range.volumes.push_back({model_volume->id(), transformed_its_bbox2d(model_volume->get_convex_hull().its,
                                                           trafo_for_bbox(object_trafo, model_volume->get_matrix()), offset)});
@@ -1676,9 +1681,23 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
 	        	// If some of the instances changed, the bounding box of the updated ModelObject is likely no more valid.
 	        	// This is safe as the ModelObject's bounding box is only accessed from this function, which is called from the main thread only.
 	 			model_object.invalidate_bounding_box();
+
+
 	        	// Synchronize the content of instances.
 	        	auto new_instance = model_object_new.instances.begin();
-				for (auto old_instance = model_object.instances.begin(); old_instance != model_object.instances.end(); ++ old_instance, ++ new_instance) {
+				for (auto old_instance = model_object.instances.begin(); old_instance != model_object.instances.end(); ++ old_instance, ++ new_instance) 
+                {
+                    //如果发生了移动等变换，需要让支撑重新计算
+                    //见bug https://zentao.creality.com/zentao/bug-view-14157.html
+                    bool is_transform = !((*old_instance)->get_transformation().get_matrix().isApprox((*new_instance)->get_transformation().get_matrix()));
+                     if (is_transform)
+                     {
+                         for (const PrintObjectStatus& print_object_status : print_objects_range)
+                         {
+                             update_apply_status(print_object_status.print_object->invalidate_step(posSupportMaterial));
+                         }
+                     }
+
 					(*old_instance)->set_transformation((*new_instance)->get_transformation());
                     (*old_instance)->print_volume_state = (*new_instance)->print_volume_state;
                     (*old_instance)->printable 		    = (*new_instance)->printable;

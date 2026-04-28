@@ -45,6 +45,7 @@ class AppUpdateFinishDialog : public DPIDialog
 {
 public:
     AppUpdateFinishDialog(wxWindow* parent);
+    bool Show(bool show = true) override;
 
 protected:
     void on_dpi_changed(const wxRect& suggested_rect) override;

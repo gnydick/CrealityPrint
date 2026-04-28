@@ -58,8 +58,15 @@ public:
     std::string set_temperatured(float temperature, bool wait = false, int tool = -1) const;
     std::string set_bed_temperature(int temperature, bool wait = false);
     std::string set_chamber_temperature(int temperature, bool wait = false);
-    std::string set_print_acceleration(unsigned int acceleration)   { return set_acceleration_internal(Acceleration::Print, acceleration); }
-    std::string set_travel_acceleration(unsigned int acceleration)  { return set_acceleration_internal(Acceleration::Travel, acceleration); }
+    std::string set_print_acceleration(unsigned int acceleration);
+    std::string set_travel_acceleration(unsigned int acceleration);
+    std::string set_travel_acceleration();
+    void set_first_layer_travel_acceleration(const std::vector<unsigned int>& travel_accelerations);
+    void set_first_layer(bool is_first_layer);
+    void set_auto_travel_acceleration_override(unsigned int acceleration);
+    void clear_auto_travel_acceleration_override();
+    void set_auto_travel_acceleration_suppressed(bool suppressed);
+    bool auto_travel_acceleration_suppressed() const { return m_suppress_auto_travel_acceleration; }
     std::string set_jerk_xy(double jerk);
     // Orca: set acceleration and jerk in one command for Klipper
     std::string set_accel_and_jerk(unsigned int acceleration, double jerk);
@@ -179,6 +186,10 @@ public:
     bool            m_is_bbl_printers = false;
     double          m_current_speed;
     bool            m_is_first_layer = true;
+    std::vector<unsigned int> m_first_layer_travel_accelerations; // multi extruder, extruder size
+    bool            m_has_auto_travel_acceleration_override = false;
+    unsigned int    m_auto_travel_acceleration_override = 0;
+    bool            m_suppress_auto_travel_acceleration = false;
 
     enum class Acceleration {
         Travel,

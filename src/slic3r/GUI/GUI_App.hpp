@@ -377,8 +377,9 @@ private:
     void set_cloud_model_download(const std::string& data) { m_cloud_download_model.push_back(data); }
     std::list<std::string> get_cloud_model_download() { return m_cloud_download_model; }
     void clear_cloud_model_download() { m_cloud_download_model.clear(); }
-    int  get_3mf_download_progress(const std::string& user_id, const std::string& file_id);
-    void cancel_3mf_download(const std::string& user_id, const std::string& file_id);
+    int         get_3mf_download_progress(const std::string& user_id, const std::string& file_id);
+    std::string get_3mf_download_path(const std::string& user_id, const std::string& file_id);
+    void        cancel_3mf_download(const std::string& user_id, const std::string& file_id);
     bool                   getExtraHeader(std::map<std::string, std::string>& mapHeader);
     
     // SoftFever

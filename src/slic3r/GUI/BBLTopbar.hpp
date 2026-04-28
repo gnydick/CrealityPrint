@@ -87,6 +87,10 @@ public:
 
 private:
 
+    wxRect GetTitleDisplayRect() const;
+    void LayoutTitleLabel();
+    void ScheduleFileNameDisplayUpdate();
+    void UpdateFileNameDisplayAfterLayout();
     wxString TruncateTextToWidth(const wxString& text, int maxWidth, Label* label);
 
     void OnWindowResize(wxSizeEvent& event);
@@ -123,6 +127,7 @@ private:
     wxAuiToolBarItem* maximize_btn;
     wxAuiToolBarItem* m_save_project_item;
     wxAuiToolBarItem* m_upload_btn;
+    wxAuiToolBarItem* m_feedback_separator_item{nullptr};
     wxAuiToolBarItem* m_feedback_item;
     wxControl* m_tabCtrol;
 
@@ -144,6 +149,7 @@ private:
     bool m_skip_popup_file_menu;
     bool m_skip_popup_dropdown_menu;
     bool m_skip_popup_calib_menu;
+    bool m_file_name_update_scheduled{false};
 
     wxString m_displayName;
 };

@@ -741,6 +741,13 @@ private:
     //BBS: add only gcode mode
     bool m_only_gcode_in_preview {false};
     std::vector<size_t> m_ssid_to_moveid_map;
+    // Prefix-sum array for arc interpolation points.
+    // m_ssid_arc_extra_segments[i] = total extra arc interpolation points for all s_ids in [0, i].
+    // Allows O(1) range-sum queries: sum for [lo+1, hi] = arr[hi] - arr[lo].
+    // Replaces the inner O(N) loop that iterates over ssid ranges in refresh_render_paths.
+    std::vector<unsigned int> m_ssid_arc_extra_segments;
+
+	std::vector<size_t> m_sid_to_moveid;
 
     std::vector<TBuffer> m_buffers{ static_cast<size_t>(EMoveType::Extrude_Alter) };
     // bounding box of toolpaths
@@ -855,21 +862,24 @@ public:
     bool is_gcode_result_valid() const {
         return m_gcode_result == nullptr ? false : true;
     }
+    bool is_toolpath_outside() const { return m_gcode_result ? m_gcode_result->toolpath_outside : false; }
     const float                get_max_print_height() const { return m_max_print_height; }
     const BoundingBoxf3& get_paths_bounding_box() const { return m_paths_bounding_box; }
     const BoundingBoxf3& get_max_bounding_box() const { return m_max_bounding_box; }
     const BoundingBoxf3& get_shell_bounding_box() const { return m_shell_bounding_box; }
 
-    BoundingBoxf3 get_paths_bounding_box_ex() {
-        BoundingBoxf3* paths_box_ex = new BoundingBoxf3(m_paths_bounding_box);
-        paths_box_ex->min.x() -= m_gcode_result->x_offset;
-        paths_box_ex->min.y() -= m_gcode_result->y_offset;
-        paths_box_ex->max.x() -= m_gcode_result->x_offset;
-        paths_box_ex->max.y() -= m_gcode_result->y_offset;
-        return *paths_box_ex;
+    BoundingBoxf3 get_paths_bounding_box_ex() const {
+        BoundingBoxf3 paths_box_ex = m_paths_bounding_box;
+        if (!m_gcode_result)
+            return paths_box_ex;
+        paths_box_ex.min.x() -= m_gcode_result->x_offset;
+        paths_box_ex.min.y() -= m_gcode_result->y_offset;
+        paths_box_ex.max.x() -= m_gcode_result->x_offset;
+        paths_box_ex.max.y() -= m_gcode_result->y_offset;
+        return paths_box_ex;
     }
 
-    bool           has_printable_area() { return m_gcode_result ? m_gcode_result->printable_area.size() : false; }
+    bool           has_printable_area() const { return m_gcode_result ? !m_gcode_result->printable_area.empty() : false; }
     BoundingBoxf3&        get_printable_area()
     {
         BoundingBoxf bboxf = get_extents(m_gcode_result->printable_area);

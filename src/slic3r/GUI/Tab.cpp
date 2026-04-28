@@ -2726,6 +2726,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("initial_layer_acceleration");
         optgroup->append_single_option_line("top_surface_acceleration");
         optgroup->append_single_option_line("travel_acceleration");
+        optgroup->append_single_option_line("initial_layer_travel_acceleration");
         optgroup->append_single_option_line("accel_to_decel_enable");
         optgroup->append_single_option_line("accel_to_decel_factor");
         optgroup->append_single_option_line("travel_short_distance_acceleration");
@@ -6963,7 +6964,7 @@ void Tab::OnKeyDown(wxKeyEvent& event)
 
 void Tab::compare_preset()
 {
-    wxGetApp().mainframe->diff_dialog.show(m_type);
+    wxGetApp().mainframe->diff_dialog->show(m_type);
 }
 
 void Tab::transfer_options(const std::string &name_from, const std::string &name_to, std::vector<std::string> options)
@@ -7117,7 +7118,7 @@ void Tab::save_preset(std::string name /*= ""*/, bool detach, bool save_to_proje
     }
 
     // update preset comboboxes in DiffPresetDlg
-    wxGetApp().mainframe->diff_dialog.update_presets(m_type);
+    wxGetApp().mainframe->diff_dialog->update_presets(m_type);
     CXCloudDataCenter::getInstance().setTokenInvalid(true);
 }
 

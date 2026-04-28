@@ -9,6 +9,7 @@
 #include "Plater.hpp"
 #include "BitmapComboBox.hpp"
 #include "MainFrame.hpp"
+#include "AnalyticsDataUploadManager.hpp"
 
 #include "slic3r/Utils/UndoRedo.hpp"
 
@@ -412,6 +413,9 @@ bool ObjectList::ObjList_Texture::init_svg_texture()
 
 ImTextureID ObjectList::ObjList_Texture::get_custom_texture_id(IM_TEXTURE_NAME name, bool selected) const
 {
+    if (name >= texNormalPart && name <= texSupportEnforcer)
+        return nullptr;
+
     const auto& arr = selected ? m_custom_texture_ids_selected : m_custom_texture_ids;
     if (size_t(name) >= arr.size())
         return nullptr;
@@ -2077,6 +2081,12 @@ void ObjectList::load_subobject(ModelVolumeType type, bool from_galery /* = fals
 
     // BBS: notify partplate the modify
     notify_instance_updated(obj_idx);
+    
+    // 【新增】标记几何体修改（添加部件成功）
+    if (type == ModelVolumeType::MODEL_PART) {
+        AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+            .mark_modified(AnalyticsDataUploadManager::ModelModifyType::ADD_PART);
+    }
 }
 /*
 void ObjectList::load_part(ModelObject& model_object, std::vector<ModelVolume*>& added_volumes, ModelVolumeType type, bool from_galery = false)
@@ -2755,6 +2765,12 @@ bool ObjectList::del_subobject_from_object(const int obj_idx, const int idx, con
         }
         // BBS: notify partplate the modify
         notify_instance_updated(obj_idx);
+        
+        // 【新增】标记几何体修改（删除部件成功）
+        if (volume->is_model_part()) {
+            AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+                .mark_modified(AnalyticsDataUploadManager::ModelModifyType::DELETE_PART);
+        }
     } else if (type == itInstance) {
         if (object->instances.size() == 1) {
             // BBS: remove snapshot name "Last instance of an object cannot be deleted."
@@ -2825,7 +2841,11 @@ void ObjectList::split()
 
     // BBS: notify partplate the modify
     notify_instance_updated(obj_idx);
-
+    
+    // 【新增】标记几何体修改（拆分到部件成功）
+    AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+        .mark_modified(AnalyticsDataUploadManager::ModelModifyType::SPLIT_PARTS);
+    
     update_info_items(obj_idx);
 }
 
@@ -4474,6 +4494,10 @@ bool ObjectList::edit_layer_range(const t_layer_height_range& range, const t_lay
     }
 
     changed_object(obj_idx);
+    
+    // 【新增】标记几何体修改（高度范围修改完成）
+    AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+        .mark_modified(AnalyticsDataUploadManager::ModelModifyType::HEIGHT_RANGE);
 
     wxDataViewItem root_item = m_objects_model->GetLayerRootItem(m_objects_model->GetItemById(obj_idx));
     // To avoid update selection after deleting of a selected item (under GTK)
@@ -5674,6 +5698,12 @@ void ObjectList::fix_through_netfabb()
     plater->get_notification_manager()->push_notification(NotificationType::NetfabbFinished,
                                                           NotificationManager::NotificationLevel::PrintInfoShortNotificationLevel,
                                                           boost::nowide::narrow(msg));
+    
+    // 【新增】标记几何体修改（有成功的模型就标记）
+    if (!succes_models.empty()) {
+        AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+            .mark_modified(AnalyticsDataUploadManager::ModelModifyType::REPAIR);
+    }
 }
 
 void ObjectList::simplify()

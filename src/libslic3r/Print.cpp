@@ -360,6 +360,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "support_multi_bed_types" 
             || opt_key == "retraction_length"
             || opt_key == "retraction_speed"
+            || opt_key == "initial_layer_travel_acceleration"
             ) {
             steps.emplace_back(psWipeTower);
             steps.emplace_back(psSkirtBrim);

@@ -15,6 +15,7 @@
 #include "slic3r/GUI/Jobs/NotificationProgressIndicator.hpp"
 #include "slic3r/Utils/WxFontUtils.hpp"
 #include "slic3r/Utils/UndoRedo.hpp"
+#include "slic3r/GUI/AnalyticsDataUploadManager.hpp"
 
 #include "libslic3r/Geometry.hpp" // to range pi pi
 #include "libslic3r/Timer.hpp" 
@@ -359,7 +360,13 @@ void GLGizmoEmboss::on_shortcut_key() {
         // No volume to select from selection so create volume.
         // NOTE: After finish job for creation emboss Text volume,
         // GLGizmoEmboss will be opened
-        create_volume(ModelVolumeType::MODEL_PART);
+        bool success = create_volume(ModelVolumeType::MODEL_PART);
+        
+        // 【新增】标记几何体修改（创建浮雕成功）
+        if (success) {
+            AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+                .mark_modified(AnalyticsDataUploadManager::ModelModifyType::EMBOSS);
+        }
     }
     else {
         // shortcut is pressed when text is selected soo start edit it.
@@ -1835,15 +1842,19 @@ void GLGizmoEmboss::draw_font_list()
 
     // delete unloadable face name when try to use
     if (del_index.has_value()) {
-        auto face = m_face_names->faces.begin() + (*del_index);
-        std::vector<wxString>& bad = m_face_names->bad;
-        // sorted insert into bad fonts
-        auto it = std::upper_bound(bad.begin(), bad.end(), face->wx_name);
-        bad.insert(it, face->wx_name);
-        m_face_names->faces.erase(face);
-        m_face_names->faces_names.erase(m_face_names->faces_names.begin() + (*del_index));
-        // update cached file
-        store(*m_face_names);
+        size_t idx = *del_index;
+        if (idx < m_face_names->faces.size()) {
+            auto face = m_face_names->faces.begin() + idx;
+            std::vector<wxString>& bad = m_face_names->bad;
+            // sorted insert into bad fonts
+            auto it = std::upper_bound(bad.begin(), bad.end(), face->wx_name);
+            bad.insert(it, face->wx_name);
+            m_face_names->faces.erase(face);
+            if (idx < m_face_names->faces_names.size())
+                m_face_names->faces_names.erase(m_face_names->faces_names.begin() + idx);
+            // update cached file
+            store(*m_face_names);
+        }
     }
 
 #ifdef ALLOW_ADD_FONT_BY_FILE
@@ -4079,8 +4090,11 @@ bool load(Facenames &facenames) {
 
     facenames.hash = data.hash;
     facenames.faces.reserve(data.good.size());
-    for (const wxString &face : data.good)
+    facenames.faces_names.reserve(data.good.size());
+    for (const wxString &face : data.good) {
         facenames.faces.push_back({face});
+        facenames.faces_names.push_back(face.utf8_string());
+    }
     facenames.bad = data.bad;
     return true;
 }

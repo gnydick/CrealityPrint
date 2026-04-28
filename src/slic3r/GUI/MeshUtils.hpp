@@ -146,6 +146,7 @@ private:
     struct ClipResult {
         std::vector<CutIsland> cut_islands;
         Transform3d trafo; // this rotates the cut into world coords
+        float height_mesh = 0.f;
     };
     std::optional<ClipResult> m_result;
     bool m_fill_cut = true;

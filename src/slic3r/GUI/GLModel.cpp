@@ -464,7 +464,7 @@ void GLModel::init_from(const indexed_triangle_set& its)
     // vertices + indices
     unsigned int vertices_counter = 0;
     for (uint32_t i = 0; i < its.indices.size(); ++i) {
-        const stl_triangle_vertex_indices face = its.indices[i];
+        const stl_triangle_vertex_indices& face = its.indices[i];
         const stl_vertex                  vertex[3] = { its.vertices[face[0]], its.vertices[face[1]], its.vertices[face[2]] };
         const stl_vertex                  n = face_normal_normalized(vertex);
         for (size_t j = 0; j < 3; ++j) {

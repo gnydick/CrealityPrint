@@ -62,6 +62,9 @@ public:
 
     // if this ModelObject is loaded from 3mf file, the "from_loaded_id" is related to the Object id in the "3dmodel.model" file
     int from_loaded_id = -1;
+    
+    // BBS: UUID from 3MF file (p:UUID attribute)
+    std::string             uuid;
 
     Model*                  get_model() { return m_model; }
     const Model*            get_model() const { return m_model; }

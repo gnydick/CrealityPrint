@@ -913,7 +913,7 @@ static std::vector<std::string> s_Preset_print_options {
      "wall_generator", "wall_transition_length", "wall_transition_filter_deviation", "wall_transition_angle",
      "wall_distribution_count", "min_feature_size", "min_bead_width", "post_process", "min_length_factor",
      "small_perimeter_speed", "small_perimeter_threshold", "z_direction_outwall_speed_continuous",
-     "bridge_angle", "filter_out_gap_fill", "travel_acceleration","inner_wall_acceleration", "min_width_top_surface",
+     "bridge_angle", "filter_out_gap_fill", "travel_acceleration","initial_layer_travel_acceleration", "inner_wall_acceleration", "min_width_top_surface",
      "default_jerk", "outer_wall_jerk", "inner_wall_jerk", "infill_jerk", "top_surface_jerk", "initial_layer_jerk","travel_jerk",
      "top_solid_infill_flow_ratio","bottom_solid_infill_flow_ratio","only_one_wall_first_layer", "print_flow_ratio", "seam_gap",
      "role_based_wipe_speed", "wipe_speed", "accel_to_decel_enable","travel_short_distance_acceleration", "travel_short_distance_threshold","accel_to_decel_factor", "wipe_on_loops", "wipe_before_external_loop",
@@ -1138,6 +1138,7 @@ PresetCollection::PresetCollection(Preset::Type type, const std::vector<std::str
 PresetCollection& PresetCollection::operator=(const PresetCollection &rhs)
 {
     m_type = rhs.m_type;
+    m_owner = rhs.m_owner;
     m_presets = rhs.m_presets;
     m_map_alias_to_profile_name = rhs.m_map_alias_to_profile_name;
     m_map_system_profile_renamed = rhs.m_map_system_profile_renamed;
@@ -3036,6 +3037,8 @@ Preset& PresetCollection::select_preset(size_t idx)
         idx = first_visible_idx();
     m_idx_selected = idx;
     m_edited_preset = m_presets[idx];
+    if (m_type == Preset::TYPE_PRINTER && m_owner != nullptr)
+        m_owner->m_is_belt_preset = m_edited_preset.config.opt_bool("machine_is_belt");
     update_saved_preset_from_current_preset();
     bool default_visible = ! m_default_suppressed || m_idx_selected < m_num_default_presets;
     for (size_t i = 0; i < m_num_default_presets; ++i)

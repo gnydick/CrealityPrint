@@ -20,8 +20,10 @@
 #include "AnalyticsDataUploadManager.hpp"
 #define TOPBAR_ICON_SIZE  17
 
-// original is 300, in some screen scale setting case(for example 175%), make the topbar too long
-#define TOPBAR_TITLE_WIDTH  FromDIP(80)
+// The project name floats in the free gap between the mode tabs and right-side actions.
+#define TOPBAR_TITLE_MIN_VISIBLE_WIDTH 16
+#define TOPBAR_TITLE_SIDE_PADDING 8
+#define TOPBAR_TITLE_Y_OFFSET 4
 
 static long UPLOAD_BTN_CODE = 12123;
 static long HOME_BTN_CODE_CHECKED = 12124;
@@ -677,19 +679,16 @@ void BBLTopbar::Init(wxFrame* parent)
 
     this->AddStretchSpacer(1);
     m_title_LabelItem = new Label(this, Label::Head_12, _L(""));
-    m_title_LabelItem->SetMinSize(wxSize(TOPBAR_TITLE_WIDTH, FromDIP(-1)));
-    m_title_LabelItem->SetSize(wxSize(TOPBAR_TITLE_WIDTH, FromDIP(-1)));
+    m_title_LabelItem->SetWindowStyleFlag(wxALIGN_CENTER | wxALIGN_CENTER_VERTICAL);
     m_title_LabelItem->Bind(wxEVT_MOTION, &BBLTopbar::OnMouseMotion, this);
     m_title_LabelItem->Bind(wxEVT_LEFT_DOWN, &BBLTopbar::OnMouseLeftDown, this);
 
-    m_title_LabelItem->SetWindowStyleFlag(wxALIGN_RIGHT | wxALIGN_CENTER_VERTICAL);
     wxColour bgColor  = Slic3r::GUI::wxGetApp().dark_mode() ? wxColour("#010101") : wxColour(214, 214, 220);
     m_title_LabelItem->SetBackgroundColour(bgColor);
-    m_title_item = this->AddControl(m_title_LabelItem);
-    UpdateFileNameDisplay();
+    m_title_LabelItem->Hide();
 
     addDipSpacer(10);
-    wxAuiToolBarItem * tool_sep = this->AddSeparator();
+    m_feedback_separator_item = this->AddSeparator();
     addDipSpacer(10);
 
     {
@@ -795,6 +794,8 @@ void BBLTopbar::Init(wxFrame* parent)
             wxGetApp().plater()->get_current_canvas3D()->force_set_focus();
         },
         ID_CONFIG_RELATE);
+
+    ScheduleFileNameDisplayUpdate();
 }
 
 BBLTopbar::~BBLTopbar()
@@ -1223,6 +1224,7 @@ void BBLTopbar::SetMaximizedSize()
     if (maximize_bitmap.IsOk())
         maximize_btn->SetBitmap(maximize_bitmap);
     
+    ScheduleFileNameDisplayUpdate();
     --m_set_maximized_size_count;
 #endif
 }
@@ -1232,12 +1234,15 @@ void BBLTopbar::SetWindowSize()
 #ifndef __APPLE__
 if (window_bitmap.IsOk())
     maximize_btn->SetBitmap(window_bitmap);
+	ScheduleFileNameDisplayUpdate();
 #endif
 }
 
 void BBLTopbar::UpdateToolbarWidth(int width)
 {
     this->SetSize(width, m_toolbar_h);
+    UpdateFileNameDisplay();
+    ScheduleFileNameDisplayUpdate();
 }
 
 void BBLTopbar::Rescale(bool isResize) {
@@ -1582,6 +1587,55 @@ void BBLTopbar::UpdateFileNameDisplay()
     UpdateFileNameDisplay(m_displayName);
 }
 
+wxRect BBLTopbar::GetTitleDisplayRect() const
+{
+    if (!m_tabCtrol || !m_feedback_separator_item)
+        return wxRect();
+
+    const wxRect tab_rect(m_tabCtrol->GetPosition(), m_tabCtrol->GetSize());
+    wxSizerItem* sep_sizer_item = m_feedback_separator_item->GetSizerItem();
+    if (!sep_sizer_item)
+        return wxRect();
+
+    const wxRect sep_rect = sep_sizer_item->GetRect();
+    const int client_width = GetClientSize().GetWidth();
+    if (client_width <= 0 || sep_rect.GetLeft() > client_width)
+        return wxRect();
+
+    const int padding = FromDIP(TOPBAR_TITLE_SIDE_PADDING);
+
+    const int left = tab_rect.GetRight() + padding;
+    const int right = sep_rect.GetLeft() - padding;
+    const int width = right - left;
+    if (width < FromDIP(TOPBAR_TITLE_MIN_VISIBLE_WIDTH))
+        return wxRect();
+
+    const int toolbar_height = GetClientSize().GetHeight();
+    const int height = wxMax(m_title_LabelItem ? m_title_LabelItem->GetBestSize().GetHeight() : FromDIP(18), FromDIP(18));
+    const int y = wxMax(0, (toolbar_height - height) / 2 + FromDIP(TOPBAR_TITLE_Y_OFFSET));
+    return wxRect(left, y, width, height);
+}
+
+void BBLTopbar::LayoutTitleLabel()
+{
+    if (!m_title_LabelItem)
+        return;
+
+    const wxRect rect = GetTitleDisplayRect();
+    if (rect.IsEmpty()) {
+        m_title_LabelItem->Hide();
+        return;
+    }
+
+    if (m_title_LabelItem->GetPosition() != rect.GetPosition())
+        m_title_LabelItem->SetPosition(rect.GetPosition());
+    if (m_title_LabelItem->GetSize() != rect.GetSize())
+        m_title_LabelItem->SetSize(rect.GetSize());
+    if (!m_title_LabelItem->IsShown())
+        m_title_LabelItem->Show();
+    m_title_LabelItem->Raise();
+}
+
 wxString BBLTopbar::TruncateTextToWidth(const wxString& text, int maxWidth, Label* label)
 {
     if (text.IsEmpty() || maxWidth <= 0 || !label)
@@ -1602,23 +1656,36 @@ wxString BBLTopbar::TruncateTextToWidth(const wxString& text, int maxWidth, Labe
     return truncated;
 }
 
+void BBLTopbar::ScheduleFileNameDisplayUpdate()
+{
+    if (m_file_name_update_scheduled)
+        return;
+
+    m_file_name_update_scheduled = true;
+    CallAfter(&BBLTopbar::UpdateFileNameDisplayAfterLayout);
+}
+
+void BBLTopbar::UpdateFileNameDisplayAfterLayout()
+{
+    m_file_name_update_scheduled = false;
+    UpdateFileNameDisplay();
+}
+
 void BBLTopbar::UpdateFileNameDisplay(const wxString& fileName)
 {
     if (!m_title_LabelItem)
         return;
 
-    const int availableWidth = TOPBAR_TITLE_WIDTH;
-
-    m_title_LabelItem->SetMinSize(wxSize(availableWidth, -1));
-    m_title_LabelItem->SetSize(wxSize(availableWidth, -1));
-    if (m_title_item)
-        m_title_item->SetMinSize(wxSize(availableWidth, -1));
+    LayoutTitleLabel();
+    const int availableWidth = m_title_LabelItem->IsShown() ? m_title_LabelItem->GetSize().GetWidth() : 0;
 
     wxString title = fileName.IsEmpty() ? m_displayName : fileName;
     wxString displayText = TruncateTextToWidth(title, availableWidth, m_title_LabelItem);
 
-    if (m_title_LabelItem->GetLabel() != displayText)
+    if (m_title_LabelItem->GetLabel() != displayText) {
         m_title_LabelItem->SetLabel(displayText);
+        LayoutTitleLabel();
+    }
     if (m_title_LabelItem->GetToolTipText() != title)
         m_title_LabelItem->SetToolTip(title);
 

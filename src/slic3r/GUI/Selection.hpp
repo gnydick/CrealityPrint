@@ -399,7 +399,7 @@ public:
     void copy_to_clipboard();
     void paste_from_clipboard();
     //BBS get selected object instance lists
-    std::set<std::pair<int, int>> get_selected_object_instances();
+    std::set<std::pair<int, int>> get_selected_object_instances() const;
 
     const Clipboard& get_clipboard() const { return m_clipboard; }
 

@@ -15,6 +15,7 @@
 #include "ExPolygonCollection.hpp"
 #include "Geometry.hpp"
 #include "Line.hpp"
+#include "MultiPoint.hpp"
 #include "Layer.hpp"
 #include <cmath>
 #include <cassert>
@@ -335,8 +336,9 @@ static ExtrusionEntityCollection traverse_loops_classic(const PerimeterGenerator
     Polygon                     fuzzified;
     
     // Detect steep overhangs
+    const int object_layer_index = perimeter_generator.layer_id - perimeter_generator.object_config->raft_layers;
     bool overhangs_reverse = perimeter_generator.config->overhang_reverse &&
-                             perimeter_generator.layer_id % 2 == 1; // Only calculate overhang degree on odd layers
+                             object_layer_index >= 0 && object_layer_index % 2 == 0; // Reverse on odd visible layers (1-based), excluding raft offset.
 
     for (const PerimeterGeneratorLoop &loop : loops) {
         bool is_external = loop.is_external();
@@ -696,8 +698,9 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
     bool &steep_overhang_contour, bool &steep_overhang_hole)
 {
     // Detect steep overhangs
+    const int object_layer_index = perimeter_generator.layer_id - perimeter_generator.object_config->raft_layers;
     bool overhangs_reverse = perimeter_generator.config->overhang_reverse &&
-                             perimeter_generator.layer_id % 2 == 1;  // Only calculate overhang degree on odd layers
+                             object_layer_index >= 0 && object_layer_index % 2 == 0; // Reverse on odd visible layers (1-based), excluding raft offset.
 
     ExtrusionEntityCollection extrusion_coll;
     if (perimeter_generator.print_config->z_direction_outwall_speed_continuous)
@@ -1973,7 +1976,7 @@ void PerimeterGenerator::process_classic()
                     entities.reverse();
             }
             // Orca: sandwich mode.
-            else if (this->config->wall_sequence == WallSequence::InnerOuterInner) {
+            else if (this->config->wall_sequence == WallSequence::InnerOuterInner && this->layer_id > 0) {
                 entities.reverse(); // reverse all entities - order them from external to internal
                 if(entities.entities.size()>2){ // 3 walls minimum needed to do inner outer inner ordering
                     int position = 0; // index to run the re-ordering for multiple external perimeters in a single island.
@@ -2483,7 +2486,158 @@ void PerimeterGenerator::process_no_bridge(Surfaces& all_surfaces, coord_t perim
         }
     }
 }
+// ORCA:
+// Inner Outer Inner wall ordering mode perimeter order optimisation functions
+/**
+ * @brief Finds all perimeters touching a given set of reference lines, given as indexes.
+ *
+ * @param entities The list of PerimeterGeneratorArachneExtrusion entities.
+ * @param reference_indices A set of indices representing the reference points.
+ * @param threshold_external The distance threshold to consider for proximity for a reference perimeter with inset index 0
+ * @param threshold_internal The distance threshold to consider for proximity for a reference perimeter with inset index 1+
+ * @param considered_inset_idx What perimeter inset index are we searching for (eg. if we are searching for first internal perimeters proximate to the current reference perimeter, this value should be set to 1 etc).
+ * @return std::vector<int> A vector of indices representing the touching perimeters.
+ */
+static std::vector<int> find_all_touching_perimeters(const std::vector<PerimeterGeneratorArachneExtrusion> &entities,
+                                                     const std::unordered_set<int>                         &reference_indices,
+                                                     size_t                                                  threshold_external,
+                                                     size_t                                                  threshold_internal,
+                                                     size_t                                                  considered_inset_idx)
+{
+    std::unordered_set<int> touching_indices;
 
+    for (const int ref_idx : reference_indices) {
+        const auto &reference_entity = entities[ref_idx];
+        Points      reference_points = Arachne::to_points(*reference_entity.extrusion);
+        for (size_t i = 0; i < entities.size(); ++i) {
+            // Skip already considered references and the reference entity.
+            if (reference_indices.count(int(i)) > 0)
+                continue;
+            const auto &entity = entities[i];
+            // Ignore inset index 0 (external) perimeters from the re-ordering even if they are touching.
+            if (entity.extrusion->inset_idx == 0)
+                continue;
+            // Find inset index perimeters that match the requested inset index.
+            if (entity.extrusion->inset_idx != considered_inset_idx)
+                continue;
+
+            Points points   = Arachne::to_points(*entity.extrusion);
+            double distance = MultiPoint::minimumDistanceBetweenLinesDefinedByPoints(reference_points, points);
+            size_t threshold = (reference_entity.extrusion->inset_idx == 0) ? threshold_external : threshold_internal;
+            if (distance <= threshold)
+                touching_indices.insert(int(i));
+        }
+    }
+    return std::vector<int>(touching_indices.begin(), touching_indices.end());
+}
+
+/**
+ * @brief Reorders perimeters based on proximity to the reference perimeter.
+ *
+ * This approach finds all perimeters touching the external perimeter first and then finds all perimeters touching these new ones until none are left.
+ * It ensures a level-by-level traversal, similar to BFS in graph theory.
+ *
+ * @param entities The list of PerimeterGeneratorArachneExtrusion entities.
+ * @param threshold_external The distance threshold to consider for proximity for a reference perimeter with inset index 0
+ * @param threshold_internal The distance threshold to consider for proximity for a reference perimeter with inset index 1+
+ * @return std::vector<PerimeterGeneratorArachneExtrusion> The reordered list of perimeters based on proximity.
+ */
+static std::vector<PerimeterGeneratorArachneExtrusion> reorder_perimeters_by_proximity(
+    std::vector<PerimeterGeneratorArachneExtrusion> entities,
+    size_t                                          threshold_external,
+    size_t                                          threshold_internal)
+{
+    std::vector<PerimeterGeneratorArachneExtrusion> reordered;
+    std::unordered_set<int>                         included_indices;
+
+    // Reorder perimeters starting from a given reference index.
+    auto reorder_from_reference = [&](int reference_index) {
+        std::unordered_set<int> first_level_indices;
+        first_level_indices.insert(reference_index);
+
+        std::vector<int> first_level_touching_indices = find_all_touching_perimeters(
+            entities, first_level_indices, threshold_external, threshold_internal, 1);
+        // The longest first neighbour is most likely the dominant proximate perimeter.
+        if (!first_level_touching_indices.empty()) {
+            auto max_it = std::max_element(first_level_touching_indices.begin(), first_level_touching_indices.end(),
+                [&entities](int a, int b) {
+                    return entities[size_t(a)].extrusion->getLength() < entities[size_t(b)].extrusion->getLength();
+                });
+            std::iter_swap(max_it, first_level_touching_indices.end() - 1);
+        }
+
+        reordered.push_back(entities[size_t(reference_index)]);
+        included_indices.insert(reference_index);
+
+        for (int idx : first_level_touching_indices) {
+            if (included_indices.count(idx) == 0) {
+                reordered.push_back(entities[size_t(idx)]);
+                included_indices.insert(idx);
+            }
+        }
+
+        size_t current_inset_idx = 2;
+        while (true) {
+            std::unordered_set<int> current_level_indices(first_level_touching_indices.begin(), first_level_touching_indices.end());
+            std::vector<int> current_level_touching_indices = find_all_touching_perimeters(
+                entities, current_level_indices, threshold_external, threshold_internal, current_inset_idx);
+
+            if (current_level_touching_indices.empty())
+                break;
+
+            current_level_touching_indices.erase(
+                std::remove_if(current_level_touching_indices.begin(),
+                               current_level_touching_indices.end(),
+                               [&](int idx) { return included_indices.count(idx) > 0; }),
+                current_level_touching_indices.end());
+
+            if (!current_level_touching_indices.empty()) {
+                auto max_it = std::max_element(current_level_touching_indices.begin(), current_level_touching_indices.end(),
+                    [&entities](int a, int b) {
+                        return entities[size_t(a)].extrusion->getLength() < entities[size_t(b)].extrusion->getLength();
+                    });
+                std::iter_swap(max_it, current_level_touching_indices.begin());
+            }
+
+            for (int idx : current_level_touching_indices) {
+                if (included_indices.count(idx) == 0) {
+                    reordered.push_back(entities[size_t(idx)]);
+                    included_indices.insert(idx);
+                }
+            }
+
+            first_level_touching_indices = current_level_touching_indices;
+            ++current_inset_idx;
+        }
+    };
+
+    for (size_t ref_idx = 0; ref_idx < entities.size(); ++ref_idx) {
+        if (entities[ref_idx].extrusion->inset_idx == 0 && included_indices.count(int(ref_idx)) == 0)
+            reorder_from_reference(int(ref_idx));
+    }
+
+    for (size_t i = 0; i < entities.size(); ++i) {
+        if (included_indices.count(int(i)) == 0)
+            reordered.push_back(entities[i]);
+    }
+
+    return reordered;
+}
+
+/**
+ * @brief Reorders the vector to bring external perimeter contours (inset index 0) to the front.
+ *
+ * @param ordered_extrusions The vector of PerimeterGeneratorArachneExtrusion to reorder.
+ */
+static void bring_contours_to_front(std::vector<PerimeterGeneratorArachneExtrusion> &ordered_extrusions)
+{
+    std::stable_partition(ordered_extrusions.begin(), ordered_extrusions.end(),
+                          [](const PerimeterGeneratorArachneExtrusion &extrusion) {
+                              return extrusion.extrusion->is_contour() && extrusion.extrusion->inset_idx == 0;
+                          });
+}
+// ORCA:
+// Inner Outer Inner wall ordering mode perimeter order optimisation functions ended
 // Thanks, Cura developers, for implementing an algorithm for generating perimeters with variable width (Arachne) that is based on the paper
 // "A framework for adaptive width control of dense contour-parallel toolpaths in fused deposition modeling"
 void PerimeterGenerator::process_arachne()
@@ -2700,6 +2854,7 @@ void PerimeterGenerator::process_arachne()
         bool is_outer_wall_first =
             this->config->wall_sequence == WallSequence::OuterInner ||
             this->config->wall_sequence == WallSequence::AdaptiveOuterInner ||
+            (this->config->wall_sequence == WallSequence::InnerOuterInner && this->layer_id > 0) ||
             has_outer_brim_on_first_layer;
         if (is_outer_wall_first) {
             start_perimeter = 0;
@@ -2828,45 +2983,26 @@ void PerimeterGenerator::process_arachne()
         }
 
        // printf("New Layer: Layer ID %d\n",layer_id); //debug - new layer
-        if (this->config->wall_sequence == WallSequence::InnerOuterInner && !has_outer_brim_on_first_layer) {
+        if (this->config->wall_sequence == WallSequence::InnerOuterInner && this->layer_id > 0) {
             if (ordered_extrusions.size() > 2) { // 3 walls minimum needed to do inner outer inner ordering
                 int position = 0; // index to run the re-ordering for multiple external perimeters in a single island.
                 int arr_i, arr_j = 0;    // indexes to run through the walls in the for loops
                 int outer, first_internal, second_internal, max_internal, current_perimeter; // allocate index values
-                
-                // Initiate reorder sequence to bring any index 1 (first internal) perimeters ahead of any second internal perimeters
-                // Leaving these out of order will result in print defects on the external wall as they will be extruded prior to any
-                // external wall. To do the re-ordering, we are creating two extrusion arrays - reordered_extrusions which will contain
-                // the reordered extrusions and skipped_extrusions will contain the ones that were skipped in the scan
-                std::vector<PerimeterGeneratorArachneExtrusion> reordered_extrusions, skipped_extrusions;
-                bool found_second_internal = false; // helper variable to indicate the start of a new island
-                
-                for(auto extrusion_to_reorder : ordered_extrusions){ //scan the perimeters to reorder
-                    switch (extrusion_to_reorder.extrusion->inset_idx) {
-                        case 0: // external perimeter
-                            if(found_second_internal){ //new island - move skipped extrusions to reordered array
-                                for(auto extrusion_skipped : skipped_extrusions)
-                                    reordered_extrusions.emplace_back(extrusion_skipped);
-                                skipped_extrusions.clear();
-                            }
-                            reordered_extrusions.emplace_back(extrusion_to_reorder);
-                            break;
-                        case 1: // first internal perimeter
-                            reordered_extrusions.emplace_back(extrusion_to_reorder);
-                            break;
-                        default: // second internal+ perimeter -> put them in the skipped extrusions array
-                            skipped_extrusions.emplace_back(extrusion_to_reorder);
-                            found_second_internal = true;
-                            break;
-                    }
-                }
-                if(ordered_extrusions.size()>reordered_extrusions.size()){
-                    // we didnt find any more islands, so lets move the remaining skipped perimeters to the reordered extrusions list.
-                    for(auto extrusion_skipped : skipped_extrusions)
-                        reordered_extrusions.emplace_back(extrusion_skipped);
-                    skipped_extrusions.clear();
-                }
-                                
+
+                // To address scenarios where Arachne clustering puts non-contour extrusions first.
+                bring_contours_to_front(ordered_extrusions);
+
+                // Expand thresholds slightly to cover rounding issues.
+                const float expand_factor = 1.03f;
+                coord_t threshold_external = apply_precise_outer_wall
+                    ? (this->ext_perimeter_flow.scaled_spacing() + this->perimeter_flow.scaled_spacing() / 2.0)
+                    : (this->ext_perimeter_flow.scaled_spacing() / 2.0 + this->perimeter_flow.scaled_spacing() / 2.0);
+                threshold_external = coord_t(threshold_external * expand_factor);
+                coord_t threshold_internal = coord_t(this->perimeter_flow.scaled_spacing() * expand_factor);
+
+                ordered_extrusions = reorder_perimeters_by_proximity(ordered_extrusions, size_t(threshold_external), size_t(threshold_internal));
+                std::vector<PerimeterGeneratorArachneExtrusion> reordered_extrusions = ordered_extrusions;
+
                 // Now start the sandwich mode wall re-ordering using the reordered_extrusions as the basis
                 // scan to find the external perimeter, first internal, second internal and last perimeter in the island.
                 // We then advance the position index to move to the second island and continue until there are no more
@@ -2896,42 +3032,40 @@ void PerimeterGenerator::process_arachne()
                                 }
                                 break;
                         }
-                        if(outer >-1 && first_internal>-1 && second_internal>-1 && reordered_extrusions[arr_i].extrusion->inset_idx == 0){  // found a new external perimeter after we've found all three perimeters to re-order -> this means we entered a new island.
+                        if(outer >-1 && first_internal>-1 && reordered_extrusions[arr_i].extrusion->inset_idx == 0){  // found a new external perimeter after we've found at least a first internal perimeter to re-order.
                             arr_i=arr_i-1; //step back one perimeter
                             max_internal = arr_i; // new maximum internal perimeter is now this as we have found a new external perimeter, hence a new island.
                             break; // exit the for loop
                         }
                     }
-                    
+
                     // printf("Layer ID %d, Outer index %d, inner index %d, second inner index %d, maximum internal perimeter %d \n",layer_id,outer,first_internal,second_internal, max_internal);
-                    if (outer > -1 && first_internal > -1 && second_internal > -1) { // found perimeters to re-order?
+                    if (outer > -1 && first_internal > -1 && second_internal > -1) { // found all three perimeters to re-order? If not the perimeters will be processed outside in.
                         std::vector<PerimeterGeneratorArachneExtrusion> inner_outer_extrusions; // temporary array to hold extrusions for reordering
-                        inner_outer_extrusions.reserve(max_internal - position + 1); // reserve array containing the number of perimeters before a new island. Variables are array indexes hence need to add +1 to convert to position allocations
+                        inner_outer_extrusions.resize(max_internal - position + 1); // allocate number of perimeters before a new island.
                         // printf("Allocated array size %d, max_internal index %d, start position index %d \n",max_internal-position+1,max_internal,position);
-                        
+
                         for (arr_j = max_internal; arr_j >=position; --arr_j){ // go inside out towards the external perimeter (perimeters in reverse order) and store all internal perimeters until the first one identified with inset index 2
                             if(arr_j >= second_internal){
                                 //printf("Inside out loop: Mapped perimeter index %d to array position %d\n", arr_j, max_internal-arr_j);
                                 inner_outer_extrusions[max_internal-arr_j] = reordered_extrusions[arr_j];
-                                current_perimeter++; 
+                                current_perimeter++;
                             }
                         }
-                        
+
                         for (arr_j = position; arr_j < second_internal; ++arr_j){ // go outside in and map the remaining perimeters (external and first internal wall(s)) using the outside in wall order
                             // printf("Outside in loop: Mapped perimeter index %d to array position %d\n", arr_j, current_perimeter+1);
                             inner_outer_extrusions[++current_perimeter] = reordered_extrusions[arr_j];
                         }
-                        
+
                         for(arr_j = position; arr_j <= max_internal; ++arr_j) // replace perimeter array with the new re-ordered array
                             ordered_extrusions[arr_j] = inner_outer_extrusions[arr_j-position];
-                    } else
-                        break;
+                    }
                     // go to the next perimeter from the current position to continue scanning for external walls in the same island
                     position = arr_i + 1;
                 }
             }
         }
-        
         bool steep_overhang_contour = false;
         bool steep_overhang_hole    = false;
         const WallDirection wall_direction = config->wall_direction;

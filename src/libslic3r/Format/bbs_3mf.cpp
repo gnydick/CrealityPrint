@@ -4115,6 +4115,12 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             m_objects.insert({ id, object_index });
             current_object.model_object_idx = object_index;
             current_object.object = model_object;
+            
+            // BBS: Pass UUID from 3MF to ModelObject
+            model_object->uuid = current_object.uuid;
+            
+            // BBS: Debug log for UUID verification
+            BOOST_LOG_TRIVIAL(warning) << "[UUID-Debug] ModelObject created: id=" << object_id << ", uuid=" << model_object->uuid;
 
             ModelInstance* instance = m_model->objects[object_index]->add_instance();
             if (instance == nullptr) {
@@ -4925,6 +4931,12 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     triangle_mesh.flip_triangles();
 
                 volume = object.add_volume(std::move(triangle_mesh));
+                
+                // BBS: Pass UUID from 3MF to ModelVolume
+                volume->uuid = sub_object->uuid;
+                
+                // BBS: Debug log for UUID verification
+                BOOST_LOG_TRIVIAL(warning) << "[UUID-Debug] ModelVolume created: object_uuid=" << object.uuid << ", volume_uuid=" << volume->uuid << ", sub_object_id=" << sub_object->id;
 
                 if (shared_mesh_id != -1)
                     //for some cases the shared mesh is in other plate and not loaded in cli slicing

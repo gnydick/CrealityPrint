@@ -752,6 +752,7 @@ public:
 private:
     // Type of this PresetCollection: TYPE_PRINT, TYPE_FILAMENT or TYPE_PRINTER.
     Preset::Type            m_type;
+    PresetBundle           *m_owner { nullptr };
     // List of presets, starting with the "- default -" preset.
     // Use deque to force the container to allocate an object per each entry,
     // so that the addresses of the presets don't change during resizing of the container.

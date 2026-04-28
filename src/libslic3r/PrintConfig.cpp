@@ -2727,6 +2727,15 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(10000));
 
+    def           = this->add("initial_layer_travel_acceleration", coFloats);
+    def->label    = L("Initial layer travel");
+    def->tooltip  = L("The acceleration of travel of initial layer");
+    def->sidetext = "mm/s²";
+    def->min      = 0;
+    def->mode     = comAdvanced;
+    def->nullable = true;
+    def->set_default_value(new ConfigOptionFloatsNullable{0});
+
     def = this->add("top_surface_acceleration", coFloat);
     def->label = L("Top surface");
     def->tooltip = L("Acceleration of top surface infill. Using a lower value may improve top surface quality");
@@ -3992,16 +4001,17 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0));
     
-    def = this->add("max_volumetric_extrusion_rate_slope_segment_length", coInt);
+    def = this->add("max_volumetric_extrusion_rate_slope_segment_length", coFloat);
     def->label = L("Smoothing segment length");
     def->tooltip = L("A lower value results in smoother extrusion rate transitions. However, this results in a significantly larger gcode file "
     				 "and more instructions for the printer to process. \n\n"
     				 "Default value of 3 works well for most cases. If your printer is stuttering, increase this value to reduce the number of adjustments made\n\n"
-    				 "Allowed values: 1-5");
-    def->min = 1;
+    				 "Allowed values: 0.5-5");
+    def->min = 0.5;
     def->max = 5;
+    def->sidetext = L("mm");
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionInt(3));
+    def->set_default_value(new ConfigOptionFloat(3.0));
 
     def = this->add("msao_recovery_enable", coBool);
     def->label   = L("Material shortage recovery after overhang(Beta)");
@@ -4985,7 +4995,7 @@ void PrintConfigDef::init_fff_params()
 
     def = this->add("ignore_inner_color", coBool);
     def->label = L("Ignore inner color");
-    def->tooltip = L("");
+    def->tooltip = L("In certain situations where color changes are unnecessary within a model, check this option to skip the color change process. This improves printing efficiency and reduces filament waste.");
     def->mode = comSimple;
     def->set_default_value(new ConfigOptionBool(false));
 

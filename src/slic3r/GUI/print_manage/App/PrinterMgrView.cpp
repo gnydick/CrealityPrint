@@ -23,7 +23,9 @@
 #include "slic3r/GUI/print_manage/RemotePrinterManager.hpp"
 #include <boost/beast/core/detail/base64.hpp>
 #include <boost/log/trivial.hpp>
+#include <boost/nowide/fstream.hpp>
 #include <wx/strconv.h>
+#include <sstream>
 #include <vector>
 
 #include <wx/stdpaths.h>
@@ -465,6 +467,22 @@ PrinterMgrView::PrinterMgrView(wxWindow *parent)
     RegisterHandler("request_update_device_relate_to_account", [this](const nlohmann::json& json_data) {
         this->handle_request_update_device_relate_to_account(json_data);
     });
+
+    RegisterHandler("save_user_operation_state", [this](const nlohmann::json& json_data) {
+        this->handle_save_user_operation_state(json_data);
+    });
+
+    RegisterHandler("request_user_operation_state", [this](const nlohmann::json& json_data) {
+        this->handle_request_user_operation_state(json_data);
+    });
+
+    RegisterHandler("get_user_custom_color_list", [this](const nlohmann::json& json_data) {
+        this->handle_get_user_custom_color_list(json_data);
+    });
+
+    RegisterHandler("set_user_custom_color_list", [this](const nlohmann::json& json_data) {
+        this->handle_set_user_custom_color_list(json_data);
+    });
     std::string version = std::string(CREALITYPRINT_VERSION);
     std::string os = wxGetOsDescription().ToStdString();
     int port = wxGetApp().get_server_port();
@@ -472,7 +490,7 @@ PrinterMgrView::PrinterMgrView(wxWindow *parent)
     #ifdef CUSTOMIZED
         customized = 1;
     #endif
-//#define _DEBUG1 
+// #define _DEBUG1
 #ifdef _DEBUG1
      wxString url = wxString::Format("http://localhost:5173/?version=%s&port=%d&os=%s&customized=%d", version, port, os, customized);
         this->load_url(url, wxString());
@@ -659,6 +677,10 @@ void PrinterMgrView::setMqttDeviceDN(std::string dn)
 PrinterMgrView::~PrinterMgrView()
 {
     BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << " Address: " << (void*) this;
+    UnregisterHandler("save_user_operation_state");
+    UnregisterHandler("request_user_operation_state");
+    UnregisterHandler("get_user_custom_color_list");
+    UnregisterHandler("set_user_custom_color_list");
 #ifdef __WXGTK__
     m_freshTimer->Stop();
     m_browser->Stop();
@@ -1582,6 +1604,8 @@ bool PrinterMgrView::Show(bool show)
 
 void PrinterMgrView::run_script(std::string content)
 {
+    if (m_browser == nullptr || m_browser->IsBeingDeleted())
+        return;
     void* backend_after = m_browser->GetNativeBackend();
     WebView::RunScript(m_browser, content);
 }
@@ -2113,6 +2137,9 @@ void PrinterMgrView::forward_init_device_cmd_to_printer_list()
             {"accout_binded_devices", account_device_info}
         };
 
+        const nlohmann::json user_operation_state = load_user_operation_state();
+        top_level_json["deviceLayout"] = user_operation_state.value("deviceLayout", "card");
+
         // Create command JSON object
         nlohmann::json commandJson = {
             {"command", "reinit_related_to_account_device"},
@@ -2125,6 +2152,304 @@ void PrinterMgrView::forward_init_device_cmd_to_printer_list()
         std::cout << "forward_init_device_cmd_to_printer_list failed" << std::endl;
     }
 
+}
+
+std::string PrinterMgrView::get_user_operation_state_file_path() const
+{
+    return (fs::path(data_dir()) / "cache" / "send_to_printer" / "user_operation_state.json").make_preferred().string();
+}
+
+bool PrinterMgrView::save_user_operation_state(const nlohmann::json& state_data)
+{
+    try {
+        const auto path = fs::path(get_user_operation_state_file_path());
+        const auto dir  = path.parent_path();
+        if (!dir.empty() && !fs::exists(dir))
+            fs::create_directories(dir);
+
+        boost::nowide::ofstream out(path.string(), std::ios::out | std::ios::trunc);
+        if (!out.is_open()) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to open file: " << path.string();
+            return false;
+        }
+
+        out << state_data.dump(-1, ' ', true);
+        return true;
+    } catch (const std::exception& e) {
+        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to save state, error=" << e.what();
+        return false;
+    }
+}
+
+nlohmann::json PrinterMgrView::load_user_operation_state() const
+{
+    nlohmann::json default_state = {
+        {"deviceLayout", "card"},
+        {"customColorList", nlohmann::json::array()}
+    };
+
+    try {
+        const auto path = fs::path(get_user_operation_state_file_path());
+        if (!fs::exists(path))
+            return default_state;
+
+        boost::nowide::ifstream in(path.string());
+        if (!in.is_open()) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to open file: " << path.string();
+            return default_state;
+        }
+
+        std::stringstream buffer;
+        buffer << in.rdbuf();
+        if (buffer.str().empty())
+            return default_state;
+
+        auto parsed = nlohmann::json::parse(buffer.str(), nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object()) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": invalid state file: " << path.string();
+            return default_state;
+        }
+
+        std::string device_layout = "card";
+        try {
+            if (parsed.contains("deviceLayout") && parsed["deviceLayout"].is_string())
+                device_layout = parsed["deviceLayout"].get<std::string>();
+        } catch (...) {
+            device_layout = "card";
+        }
+
+        if (device_layout != "list")
+            device_layout = "card";
+
+        parsed["deviceLayout"] = device_layout;
+
+        nlohmann::json custom_color_list = nlohmann::json::array();
+        try {
+            if (parsed.contains("customColorList") && parsed["customColorList"].is_array()) {
+                const auto is_valid_slot_value = [](const nlohmann::json& value) {
+                    return value.is_string() || value.is_number_integer() || value.is_number_unsigned();
+                };
+                for (const auto& item : parsed["customColorList"]) {
+                    if (!item.is_object())
+                        continue;
+                    if (!item.contains("address") || !item["address"].is_string())
+                        continue;
+                    if (!item.contains("boxType") || !is_valid_slot_value(item["boxType"]))
+                        continue;
+                    if (!item.contains("boxId") || !is_valid_slot_value(item["boxId"]))
+                        continue;
+                    if (!item.contains("materialId") || !is_valid_slot_value(item["materialId"]))
+                        continue;
+                    if (!item.contains("customColor") || !item["customColor"].is_string())
+                        continue;
+
+                    const auto address      = item["address"].get<std::string>();
+                    const auto custom_color = item["customColor"].get<std::string>();
+                    if (address.empty() || custom_color.empty())
+                        continue;
+
+                    custom_color_list.push_back({
+                        {"address", address},
+                        {"boxType", item["boxType"]},
+                        {"boxId", item["boxId"]},
+                        {"materialId", item["materialId"]},
+                        {"customColor", custom_color}
+                    });
+                }
+            }
+        } catch (...) {
+            custom_color_list = nlohmann::json::array();
+        }
+
+        parsed["customColorList"] = custom_color_list;
+        return parsed;
+    } catch (const std::exception& e) {
+        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to load state, error=" << e.what();
+        return default_state;
+    }
+}
+
+void PrinterMgrView::handle_save_user_operation_state(const nlohmann::json& json_data)
+{
+    const nlohmann::json payload = json_data.contains("data") ? json_data["data"] : json_data;
+
+    std::string device_layout = "card";
+    try {
+        if (payload.is_object() && payload.contains("deviceLayout") && payload["deviceLayout"].is_string())
+            device_layout = payload["deviceLayout"].get<std::string>();
+        else if (payload.is_string())
+            device_layout = payload.get<std::string>();
+    } catch (...) {
+        device_layout = "card";
+    }
+
+    if (device_layout != "list")
+        device_layout = "card";
+
+    nlohmann::json state_data = load_user_operation_state();
+    if (!state_data.is_object())
+        state_data = nlohmann::json::object();
+    state_data["deviceLayout"] = device_layout;
+
+    const bool ok = save_user_operation_state(state_data);
+
+    nlohmann::json commandJson;
+    commandJson["command"] = "save_user_operation_state";
+    commandJson["data"]    = {
+        {"success", ok},
+        {"deviceLayout", state_data["deviceLayout"]}
+    };
+
+    wxString strJS = wxString::Format("window.handleStudioCmd('%s');", RemotePrint::Utils::url_encode(commandJson.dump(-1, ' ', true)));
+    run_script(strJS.ToStdString());
+}
+
+void PrinterMgrView::handle_request_user_operation_state(const nlohmann::json& json_data)
+{
+    (void)json_data;
+
+    nlohmann::json commandJson;
+    commandJson["command"] = "request_user_operation_state";
+    commandJson["data"]    = load_user_operation_state();
+
+    wxString strJS = wxString::Format("window.handleStudioCmd('%s');", RemotePrint::Utils::url_encode(commandJson.dump(-1, ' ', true)));
+    run_script(strJS.ToStdString());
+}
+
+
+void PrinterMgrView::handle_get_user_custom_color_list(const nlohmann::json& json_data)
+{
+    (void)json_data;
+
+    nlohmann::json state_data = load_user_operation_state();
+    if (!state_data.is_object())
+        state_data = nlohmann::json::object();
+
+    nlohmann::json commandJson;
+    commandJson["command"] = "get_user_custom_color_list";
+    commandJson["data"]    = {
+        {"customColorList", state_data.value("customColorList", nlohmann::json::array())}
+    };
+
+    wxString strJS = wxString::Format("window.handleStudioCmd('%s');", RemotePrint::Utils::url_encode(commandJson.dump(-1, ' ', true)));
+    run_script(strJS.ToStdString());
+}
+
+void PrinterMgrView::handle_set_user_custom_color_list(const nlohmann::json& json_data)
+{
+    const nlohmann::json payload = json_data.contains("data") ? json_data["data"] : json_data;
+
+    const auto slot_value_to_string = [](const nlohmann::json& item, const char* key) -> std::string {
+        if (!item.is_object() || !item.contains(key))
+            return "";
+
+        const auto& value = item[key];
+        try {
+            if (value.is_string())
+                return value.get<std::string>();
+            if (value.is_number_integer())
+                return std::to_string(value.get<long long>());
+            if (value.is_number_unsigned())
+                return std::to_string(value.get<unsigned long long>());
+        } catch (...) {
+        }
+
+        return "";
+    };
+
+    const auto normalize_custom_color_item = [&](const nlohmann::json& item) -> nlohmann::json {
+        if (!item.is_object())
+            return nlohmann::json();
+
+        if (!item.contains("address") || !item["address"].is_string())
+            return nlohmann::json();
+        if (!item.contains("customColor") || !item["customColor"].is_string())
+            return nlohmann::json();
+
+        const auto address      = item["address"].get<std::string>();
+        const auto box_type     = slot_value_to_string(item, "boxType");
+        const auto box_id       = slot_value_to_string(item, "boxId");
+        const auto material_id  = slot_value_to_string(item, "materialId");
+        const auto custom_color = item["customColor"].get<std::string>();
+        if (address.empty() || box_type.empty() || box_id.empty() || material_id.empty() || custom_color.empty())
+            return nlohmann::json();
+
+        return {
+            {"address", address},
+            {"boxType", item["boxType"]},
+            {"boxId", item["boxId"]},
+            {"materialId", item["materialId"]},
+            {"customColor", custom_color}
+        };
+    };
+
+    const auto is_same_slot = [&](const nlohmann::json& lhs, const nlohmann::json& rhs) {
+        return lhs.is_object() && rhs.is_object() &&
+               slot_value_to_string(lhs, "address") == slot_value_to_string(rhs, "address") &&
+               slot_value_to_string(lhs, "boxType") == slot_value_to_string(rhs, "boxType") &&
+               slot_value_to_string(lhs, "boxId") == slot_value_to_string(rhs, "boxId") &&
+               slot_value_to_string(lhs, "materialId") == slot_value_to_string(rhs, "materialId");
+    };
+
+    nlohmann::json incoming_custom_color_list = nlohmann::json::array();
+    try {
+        const auto* custom_color_data = payload.is_array()
+            ? &payload
+            : ((payload.is_object() && payload.contains("customColorList") && payload["customColorList"].is_array())
+                ? &payload["customColorList"]
+                : nullptr);
+
+        if (custom_color_data != nullptr) {
+            for (const auto& item : *custom_color_data) {
+                const auto normalized_item = normalize_custom_color_item(item);
+                if (!normalized_item.is_null())
+                    incoming_custom_color_list.push_back(normalized_item);
+            }
+        }
+    } catch (...) {
+        incoming_custom_color_list = nlohmann::json::array();
+    }
+
+    nlohmann::json state_data = load_user_operation_state();
+    if (!state_data.is_object())
+        state_data = nlohmann::json::object();
+
+    nlohmann::json custom_color_list = nlohmann::json::array();
+    if (state_data.contains("customColorList") && state_data["customColorList"].is_array())
+        custom_color_list = state_data["customColorList"];
+
+    bool ok = false;
+    if (!incoming_custom_color_list.empty()) {
+        for (const auto& incoming_item : incoming_custom_color_list) {
+            bool updated = false;
+            for (auto& item : custom_color_list) {
+                if (!is_same_slot(item, incoming_item))
+                    continue;
+
+                item = incoming_item;
+                updated = true;
+                break;
+            }
+
+            if (!updated)
+                custom_color_list.push_back(incoming_item);
+        }
+
+        state_data["customColorList"] = custom_color_list;
+        ok = save_user_operation_state(state_data);
+    } else {
+        state_data["customColorList"] = custom_color_list;
+    }
+
+    nlohmann::json commandJson;
+    commandJson["command"] = "set_user_custom_color_list";
+    commandJson["data"]    = {
+        {"success", ok},
+        {"customColorList", state_data["customColorList"]}
+    };
+
+    wxString strJS = wxString::Format("window.handleStudioCmd('%s');", RemotePrint::Utils::url_encode(commandJson.dump(-1, ' ', true)));
+    run_script(strJS.ToStdString());
 }
 
 bool PrinterMgrView::LoadFile(std::string jPath, std::string &sContent)

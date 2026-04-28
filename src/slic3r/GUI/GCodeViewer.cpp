@@ -48,6 +48,7 @@
 #include <array>
 #include <algorithm>
 #include <chrono>
+#include <unordered_set>
 #include <utility>
 
 #define SHORT_TYPE_POSITION_SCALE            (50.0)
@@ -259,6 +260,41 @@ static Vec2f calc_pt_in_screen(const Vec3d& pt, const Matrix4d& view_proj_mat, i
     return Vec2f(x, y);
 }
 
+static bool has_non_zero_volume(const std::map<size_t, double>& volumes, const double eps = 1e-9)
+{
+    return std::any_of(volumes.begin(), volumes.end(), [eps](const auto& item) { return item.second > eps; });
+}
+
+static void collect_active_extruders(const std::map<size_t, double>& volumes, std::unordered_set<size_t>& out, const double eps = 1e-9)
+{
+    for (const auto& [extruder_id, volume] : volumes) {
+        if (volume > eps)
+            out.insert(extruder_id);
+    }
+}
+
+// Merge "Flushed" into "Model" only when the plate truly behaves as a single-nozzle print:
+// one active extruder in statistics, flush exists, and no support / wipe tower material.
+static bool should_merge_flush_into_model(const PrintEstimatedStatistics& stats)
+{
+    const bool has_flush = has_non_zero_volume(stats.flush_per_filament);
+    if (!has_flush)
+        return false;
+
+    std::unordered_set<size_t> active_extruders;
+    collect_active_extruders(stats.total_volumes_per_extruder, active_extruders);
+    // Fallback for incomplete totals.
+    if (active_extruders.empty()) {
+        collect_active_extruders(stats.model_volumes_per_extruder, active_extruders);
+        collect_active_extruders(stats.flush_per_filament, active_extruders);
+        collect_active_extruders(stats.support_volumes_per_extruder, active_extruders);
+        collect_active_extruders(stats.wipe_tower_volumes_per_extruder, active_extruders);
+    }
+
+    const bool has_support    = has_non_zero_volume(stats.support_volumes_per_extruder);
+    const bool has_wipe_tower = has_non_zero_volume(stats.wipe_tower_volumes_per_extruder);
+    return active_extruders.size() == 1 && !has_support && !has_wipe_tower;
+}
 void GCodeViewer::VBuffer::reset()
 {
     // release gpu memory
@@ -1640,6 +1676,10 @@ void GCodeViewer::reset()
     m_moves_count = 0;
     m_ssid_to_moveid_map.clear();
     m_ssid_to_moveid_map.shrink_to_fit();
+    m_ssid_arc_extra_segments.clear();
+    m_ssid_arc_extra_segments.shrink_to_fit();
+	m_sid_to_moveid.clear();
+    m_sid_to_moveid.shrink_to_fit();
     for (TBuffer& buffer : m_buffers) {
         buffer.reset();
     }
@@ -2202,6 +2242,7 @@ void GCodeViewer::update_layers_slider_mode()
 }
 
 void GCodeViewer::update_marker_curr_move() {
+#if 0
     if ((int)m_last_result_id != -1) {
         auto it = std::find_if(m_gcode_result->moves.begin(), m_gcode_result->moves.end(), [this](auto move) {
                 if (m_sequential_view.current.last < m_sequential_view.gcode_ids.size() && m_sequential_view.current.last >= 0) {
@@ -2212,6 +2253,16 @@ void GCodeViewer::update_marker_curr_move() {
         if (it != m_gcode_result->moves.end())
             marker.update_curr_move(*it);
     }
+#else
+    if ((int) m_last_result_id == -1 || m_sequential_view.current.last >= m_sid_to_moveid.size())
+        return;
+
+    // Direct O(1) lookup using pre-built s_id -> move_id mapping
+    // This replaces the original O(N) linear search through all moves
+    const size_t move_id = m_sid_to_moveid[m_sequential_view.current.last];
+    if (move_id < m_gcode_result->moves.size()) 
+        marker.update_curr_move(m_gcode_result->moves[move_id]);
+#endif
 }
 
 bool GCodeViewer::is_toolpath_move_type_visible(EMoveType type) const
@@ -2947,10 +2998,13 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
     */
 
     m_sequential_view.gcode_ids.clear();
+    m_sid_to_moveid.clear();
     for (size_t i = 0; i < gcode_result.moves.size(); ++i) {
         const GCodeProcessorResult::MoveVertex& move = gcode_result.moves[i];
-        if (move.type != EMoveType::Seam)
+        if (move.type != EMoveType::Seam) {
             m_sequential_view.gcode_ids.push_back(move.gcode_id);
+			m_sid_to_moveid.push_back(i);
+        }
     }
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(",m_contained_in_bed %1%\n")%m_contained_in_bed;
 
@@ -3152,6 +3206,23 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
     m_ssid_to_moveid_map.reserve( m_moves_count - biased_seams_ids.size());
     for (size_t i = 0; i < m_moves_count - biased_seams_ids.size(); i++)
         m_ssid_to_moveid_map.push_back(extract_move_id(i));
+
+    // Build arc-interpolation-points prefix-sum for O(1) range queries in refresh_render_paths.
+    // m_ssid_arc_extra_segments[i] = cumulative extra arc segments for all s_ids in [0, i].
+    {
+        const size_t ssid_count = m_ssid_to_moveid_map.size();
+        m_ssid_arc_extra_segments.resize(ssid_count, 0u);
+        unsigned int running_sum = 0;
+        for (size_t i = 0; i < ssid_count; ++i) {
+            const size_t move_id = m_ssid_to_moveid_map[i];
+            if (move_id < gcode_result.moves.size()) {
+                const auto& mv = gcode_result.moves[move_id];
+                if (mv.is_arc_move())
+                    running_sum += static_cast<unsigned int>(mv.interpolation_points.size());
+            }
+            m_ssid_arc_extra_segments[i] = running_sum;
+        }
+    }
 
 	// dismiss, no more needed
     std::vector<size_t>().swap(biased_seams_ids);
@@ -4088,8 +4159,8 @@ void GCodeViewer::refresh_render_paths(bool keep_sequential_current_first, bool 
             return false;
 
         Path path = buffer.paths[path_id];
-        size_t first = path_id;
-        size_t last = path_id;
+        //size_t first = path_id;
+        //size_t last = path_id;
 
         // check adjacent paths
         // while (first > 0 && path.sub_paths.front().first.position.isApprox(buffer.paths[first - 1].sub_paths.back().last.position)) {
@@ -4126,13 +4197,18 @@ void GCodeViewer::refresh_render_paths(bool keep_sequential_current_first, bool 
     //BBS
     if (!keep_sequential_current_last) sequential_view->current.last = m_sequential_view.gcode_ids.size();
 
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format("before call show_gcode_surface");
     bool show_surface = show_gcode_surface();
-    BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format("after call show_gcode_surface");
 
     // first pass: collect visible paths and update sequential view data
     // Store layer index as signed int to preserve sentinel values (e.g. -1) and avoid narrowing later.
     std::vector<std::tuple<unsigned char, unsigned int, unsigned int, unsigned int, int>> paths;
+
+    // Pre-compute s_id boundaries for the current layer range once.
+    // This avoids repeated get_endpoints_at() calls (struct returned by value + bounds check)
+    // inside the hot inner loop that may iterate over hundreds of thousands of paths.
+    const size_t s_range_min = m_layers.get_endpoints_at(m_layers_z_range[0]).first;
+    const size_t s_range_max = m_layers.get_endpoints_at(m_layers_z_range[1]).last;
+    const size_t s_top_min   = m_layers.get_endpoints_at(m_layers_z_range[1]).first; // s_top_max == s_range_max
 
 	std::set<int>& special_surface_layer = const_cast<std::set<int>&>(m_top_surface_layer);
     special_surface_layer.clear();
@@ -4148,14 +4224,14 @@ void GCodeViewer::refresh_render_paths(bool keep_sequential_current_first, bool 
         if (buffer.render_primitive_type == TBuffer::ERenderPrimitiveType::InstancedModel ||
             buffer.render_primitive_type == TBuffer::ERenderPrimitiveType::BatchedModel) {
             for (size_t id : buffer.model.instances.s_ids) {
-                if (id < m_layers.get_endpoints_at(m_layers_z_range[0]).first || m_layers.get_endpoints_at(m_layers_z_range[1]).last < id)
+                if (id < s_range_min || s_range_max < id)
                     continue;
 
                 global_endpoints.first = std::min(global_endpoints.first, id);
                 global_endpoints.last = std::max(global_endpoints.last, id);
 
                 if (top_layer_only) {
-                    if (id < m_layers.get_endpoints_at(m_layers_z_range[1]).first || m_layers.get_endpoints_at(m_layers_z_range[1]).last < id)
+                    if (id < s_top_min || s_range_max < id)
                         continue;
 
                     top_layer_endpoints.first = std::min(top_layer_endpoints.first, id);
@@ -4164,15 +4240,20 @@ void GCodeViewer::refresh_render_paths(bool keep_sequential_current_first, bool 
             }
         }
         else {
-			int ref_layer_idx = 0;
+            int ref_layer_idx = m_layers_z_range[0];
             
 			for (size_t i = 0; i < buffer.paths.size(); ++i) {
                 const Path& path = buffer.paths[i];
+                const size_t path_front = path.sub_paths.front().first.s_id;
+                const size_t path_back  = path.sub_paths.back().last.s_id;
+
                 if (path.type == EMoveType::Travel) {
-                    if (!is_travel_in_layers_range(i, m_layers_z_range[0], m_layers_z_range[1]))
+                    // Travel: accept if either endpoint falls within the layer range (path may span layers).
+                    if (!((s_range_min <= path_front && path_front <= s_range_max) ||
+                          (s_range_min <= path_back  && path_back  <= s_range_max)))
                         continue;
                 }
-                else if (!is_in_layers_range(path, m_layers_z_range[0], m_layers_z_range[1]))
+                else if (path_front < s_range_min || path_back > s_range_max)
                     continue;
 
                 if (path.type == EMoveType::Extrude && !is_visible(path))
@@ -4192,7 +4273,7 @@ void GCodeViewer::refresh_render_paths(bool keep_sequential_current_first, bool 
                     Layers::Endpoints endpoints = m_layers.get_endpoints_at(ref_layer_idx);
 
                     int layer_idx = -1; // get path layer index
-                    if (endpoints.first <= path.sub_paths.front().first.s_id && path.sub_paths.back().last.s_id <= endpoints.last) {
+                    if (endpoints.first <= path_front && path_back <= endpoints.last) {
                         layer_idx = ref_layer_idx;
                     } else {
                         layer_idx     = get_layer_index(path);
@@ -4209,22 +4290,24 @@ void GCodeViewer::refresh_render_paths(bool keep_sequential_current_first, bool 
 
                 // store valid path
                 for (size_t j = 0; j < path.sub_paths.size(); ++j) {
-                    paths.push_back({ static_cast<unsigned char>(b), path.sub_paths[j].first.b_id, static_cast<unsigned int>(i), static_cast<unsigned int>(j), ref_layer_idx });
+                    paths.emplace_back(static_cast<unsigned char>(b), path.sub_paths[j].first.b_id, static_cast<unsigned int>(i), static_cast<unsigned int>(j), ref_layer_idx);
                 }
 
-                global_endpoints.first = std::min(global_endpoints.first, path.sub_paths.front().first.s_id);
-                global_endpoints.last = std::max(global_endpoints.last, path.sub_paths.back().last.s_id);
+                global_endpoints.first = std::min(global_endpoints.first, path_front);
+                global_endpoints.last = std::max(global_endpoints.last, path_back);
 
                 if (top_layer_only) {
                     if (path.type == EMoveType::Travel) {
-                        if (is_travel_in_layers_range(i, m_layers_z_range[1], m_layers_z_range[1])) {
-                            top_layer_endpoints.first = std::min(top_layer_endpoints.first, path.sub_paths.front().first.s_id);
-                            top_layer_endpoints.last = std::max(top_layer_endpoints.last, path.sub_paths.back().last.s_id);
+                        // Travel top: at least one endpoint in the top layer range.
+                        if ((s_top_min <= path_front && path_front <= s_range_max) ||
+                            (s_top_min <= path_back  && path_back  <= s_range_max)) {
+                            top_layer_endpoints.first = std::min(top_layer_endpoints.first, path_front);
+                            top_layer_endpoints.last = std::max(top_layer_endpoints.last, path_back);
                         }
                     }
-                    else if (is_in_layers_range(path, m_layers_z_range[1], m_layers_z_range[1])) {
-                        top_layer_endpoints.first = std::min(top_layer_endpoints.first, path.sub_paths.front().first.s_id);
-                        top_layer_endpoints.last = std::max(top_layer_endpoints.last, path.sub_paths.back().last.s_id);
+                    else if (path_front >= s_top_min && path_back <= s_range_max) {
+                        top_layer_endpoints.first = std::min(top_layer_endpoints.first, path_front);
+                        top_layer_endpoints.last = std::max(top_layer_endpoints.last, path_back);
                     }
                 }
             }
@@ -4390,12 +4473,18 @@ m_no_render_path = false;
                     const size_t max_s_id = chunk_max_s_id;
                     const size_t min_s_id = chunk_min_s_id;
                     unsigned int segments_count = static_cast<unsigned int>(max_s_id - min_s_id);
+#if 0
                     for (size_t i = min_s_id + 1; i < max_s_id + 1; ++i) {
                         const size_t move_id = m_ssid_to_moveid_map[i];
                         const GCodeProcessorResult::MoveVertex& curr = m_gcode_result->moves[move_id];
                         if (curr.is_arc_move())
                             segments_count += static_cast<unsigned int>(curr.interpolation_points.size());
                     }
+#else
+                    // O(1) prefix-sum query replaces the former O(N) inner loop over arc moves
+                    if (max_s_id < m_ssid_arc_extra_segments.size() && min_s_id < m_ssid_arc_extra_segments.size())
+                        segments_count += m_ssid_arc_extra_segments[max_s_id] - m_ssid_arc_extra_segments[min_s_id];
+#endif
                     size_in_indices = buffer.indices_per_segment() * segments_count;
 
                     if (size_in_indices == 0)
@@ -4511,6 +4600,7 @@ m_no_render_path = false;
             size_t max_s_id = std::min(m_sequential_view.current.last, sub_path.last.s_id);
             size_t min_s_id = std::max(m_sequential_view.current.first, sub_path.first.s_id);
             unsigned int segments_count = max_s_id - min_s_id;
+#if 0
             for (size_t i = min_s_id + 1; i < max_s_id + 1; i++) {
                 size_t move_id = m_ssid_to_moveid_map[i];
                 const GCodeProcessorResult::MoveVertex& curr = m_gcode_result->moves[move_id];
@@ -4518,6 +4608,11 @@ m_no_render_path = false;
                     segments_count += curr.interpolation_points.size();
                 }
             }
+#else 
+            // O(1) prefix-sum query replaces the former O(N) inner loop over arc moves
+            if (max_s_id < m_ssid_arc_extra_segments.size() && min_s_id < m_ssid_arc_extra_segments.size())
+                segments_count += m_ssid_arc_extra_segments[max_s_id] - m_ssid_arc_extra_segments[min_s_id];
+#endif
             size_in_indices = buffer.indices_per_segment() * segments_count;
             break;
         }
@@ -5327,8 +5422,7 @@ void GCodeViewer::render_all_plates_stats(const std::vector<const GCodeProcessor
         {
             auto plate_print_statistics = plate->get_slice_result()->print_statistics;
             auto plate_extruders = plate->get_extruders(true);
-            const bool merge_plate_flush_into_model = (wxGetApp().filaments_cnt() > 1) &&
-                (std::count_if(plate_print_statistics.model_volumes_per_extruder.begin(), plate_print_statistics.model_volumes_per_extruder.end(), [](const auto& item) { return item.second > 0.0; }) == 1);
+            const bool merge_plate_flush_into_model = should_merge_flush_into_model(plate_print_statistics);
             for (size_t extruder_id : plate_extruders) {
                 extruder_id -= 1;
                 double model_volume = 0.0;
@@ -6243,9 +6337,7 @@ public:
             total_filaments.push_back(buffer);
 
 
-            const bool merge_flush_into_model = (wxGetApp().filaments_cnt() > 1) &&
-                (std::count_if(model_used_filaments_g.begin(), model_used_filaments_g.end(), [](double used_filament_g) { return used_filament_g > 0.0; }) == 1) &&
-                (total_flushed_filament_m > 0.0 || total_flushed_filament_g > 0.0);
+            const bool merge_flush_into_model = should_merge_flush_into_model(m_print_statistics);
             const int color_print_displayed_columns = merge_flush_into_model ? (displayed_columns & ~ColumnData::Flushed) : displayed_columns;
 
             std::vector<std::pair<std::string, std::vector<::string>>> title_columns;
@@ -6472,9 +6564,7 @@ public:
         case Slic3r::GUI::GCodeViewer::EViewType::ColorPrint: {
             //BBS: replace model custom gcode with current plate custom gcode
             const std::vector<CustomGCode::Item>& custom_gcode_per_print_z = m_custom_gcode_per_print_z;
-            const bool merge_flush_into_model = (wxGetApp().filaments_cnt() > 1) &&
-                (std::count_if(model_used_filaments_g.begin(), model_used_filaments_g.end(), [](double used_filament_g) { return used_filament_g > 0.0; }) == 1) &&
-                (total_flushed_filament_m > 0.0 || total_flushed_filament_g > 0.0);
+            const bool merge_flush_into_model = should_merge_flush_into_model(m_print_statistics);
             const int color_print_displayed_columns = merge_flush_into_model ? (displayed_columns & ~ColumnData::Flushed) : displayed_columns;
             size_t i = 0;
             for (auto extruder_idx : m_extruder_ids) {
@@ -7412,16 +7502,16 @@ void GCodeViewer::_on_set_fold(bool fold_value)
 
 bool GCodeViewer::show_gcode_surface() const { 
 	
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format("verify m_gcode_result begin");
-    boost::log::core::get()->flush();
+	//BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format("verify m_gcode_result begin");
+    //boost::log::core::get()->flush();
 
 	if (m_gcode_result) {
         if (m_gcode_result->all_surface_with_shell == false) 
 			return false;
 	}	
 
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format("verify m_gcode_result end");
-    boost::log::core::get()->flush();
+	//BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format("verify m_gcode_result end");
+    //boost::log::core::get()->flush();
 
 	bool full_range   = m_layers_slider->is_higher_at_max() && m_layers_slider->is_lower_at_min() && m_moves_slider->is_higher_at_max();
     bool show_surface = full_range && is_visible(ExtrusionRole::erExternalPerimeter);  //show outer wall

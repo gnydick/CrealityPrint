@@ -1,6 +1,8 @@
 #include "GLGizmoPainterBase.hpp"
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/Gizmos/GLGizmosCommon.hpp"
+#include "slic3r/GUI/Gizmos/GLGizmoSeam.hpp"
+#include "slic3r/GUI/AnalyticsDataUploadManager.hpp"
 
 #include <GL/glew.h>
 
@@ -1132,6 +1134,17 @@ bool GLGizmoPainterBase::gizmo_event(SLAGizmoEventType action, const Vec2d& mous
         wxString action_name = this->handle_snapshot_action_name(shift_down, m_button_down);
         Plater::TakeSnapshot snapshot(wxGetApp().plater(), std::string(action_name.ToUTF8().data()), UndoRedo::SnapshotType::GizmoAction);
         update_model_object();
+        
+        // 【新增】标记几何体修改（根据当前gizmo类型判断是支撑还是Z缝）
+        if (dynamic_cast<GLGizmoSeam*>(this)) {
+            // Z缝绘制
+            AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+                .mark_modified(AnalyticsDataUploadManager::ModelModifyType::ZSEAM_PAINT);
+        } else {
+            // 支撑绘制（默认）
+            AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+                .mark_modified(AnalyticsDataUploadManager::ModelModifyType::SUPPORT_PAINT);
+        }
 
         m_button_down = Button::None;
         m_last_mouse_click = Vec2d::Zero();

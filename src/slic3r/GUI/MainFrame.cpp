@@ -205,7 +205,6 @@ MainFrame::MainFrame()
     // BBS
     , m_recent_projects(30)
     , m_settings_dialog(this)
-    , diff_dialog(this)
 {
 #ifdef __WXOSX__
     set_miniaturizable(GetHandle());
@@ -686,7 +685,7 @@ MainFrame::MainFrame()
     wxGetApp().persist_window_geometry(this, true);
     wxGetApp().persist_window_geometry(&m_settings_dialog, true);
     // bind events from DiffDlg
-
+    diff_dialog = std::make_unique<DiffPresetDialog>(this);
     bind_diff_dialog();
 
     // 在程序启动时添加
@@ -707,22 +706,22 @@ void MainFrame::bind_diff_dialog()
     };
 
     auto transfer = [this, get_tab](Preset::Type type) {
-        get_tab(type)->transfer_options(diff_dialog.get_left_preset_name(type),
-                                        diff_dialog.get_right_preset_name(type),
-                                        diff_dialog.get_selected_options(type));
+        get_tab(type)->transfer_options(diff_dialog->get_left_preset_name(type),
+                                        diff_dialog->get_right_preset_name(type),
+                                        diff_dialog->get_selected_options(type));
     };
 
     auto process_options = [this](std::function<void(Preset::Type)> process) {
-        const Preset::Type diff_dlg_type = diff_dialog.view_type();
+        const Preset::Type diff_dlg_type = diff_dialog->view_type();
         if (diff_dlg_type == Preset::TYPE_INVALID) {
-            for (const Preset::Type& type : diff_dialog.types_list() )
+            for (const Preset::Type& type : diff_dialog->types_list() )
                 process(type);
         }
         else
             process(diff_dlg_type);
     };
 
-    diff_dialog.Bind(EVT_DIFF_DIALOG_TRANSFER,      [process_options, transfer](SimpleEvent&)         { process_options(transfer); });
+    diff_dialog->Bind(EVT_DIFF_DIALOG_TRANSFER, [process_options, transfer](SimpleEvent&) { process_options(transfer); });
 }
 
 

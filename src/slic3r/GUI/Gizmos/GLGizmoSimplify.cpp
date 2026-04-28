@@ -7,6 +7,7 @@
 #include "slic3r/GUI/Plater.hpp"
 #include "slic3r/GUI/format.hpp"
 #include "slic3r/GUI/OpenGLManager.hpp"
+#include "slic3r/GUI/AnalyticsDataUploadManager.hpp"
 #include "libslic3r/AppConfig.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/ModelVolume.hpp"
@@ -554,6 +555,10 @@ void GLGizmoSimplify::apply_simplify() {
     // Fix warning icon in object list
     wxGetApp().obj_list()->update_item_error_icon(object_idx, -1);
     close();
+    
+    // 【新增】标记几何体修改（操作完成即标记）
+    AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+        .mark_modified(AnalyticsDataUploadManager::ModelModifyType::SIMPLIFY);
 }
 
 bool GLGizmoSimplify::on_is_activable() const

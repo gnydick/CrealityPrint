@@ -42,11 +42,15 @@ namespace DM{
 
     void AppUtils::PostMsg(wxWebView* browse, const std::string& data)
     {
+        if (browse == nullptr || browse->IsBeingDeleted())
+            return;
         WebView::RunScript(browse, from_u8(data));
     }
 
     void AppUtils::PostMsg(wxWebView* browse, nlohmann::json& data)
     {
+        if (browse == nullptr || browse->IsBeingDeleted())
+            return;
         std::string json   = data.dump(-1, ' ', true);
         std::string script = "window.handleStudioCmd(" + json + ");";
         WebView::RunScript(browse, from_u8(script));

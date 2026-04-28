@@ -2092,7 +2092,7 @@ void NotificationManager::push_support_manual_hint(const std::string& text, int 
         text,                               
         into_u8("ǰ������֧��(L)"),
 		[](wxEvtHandler*) {
-        if (auto* canvas = wxGetApp().plater()->get_current_canvas3D()) {
+        if (auto* canvas = wxGetApp().plater()->get_view3D_canvas3D()) {
             auto& gm = canvas->get_gizmos_manager();
             gm.open_gizmo(Slic3r::GUI::GLGizmosManager::EType::FdmSupports);
             canvas->set_as_dirty();

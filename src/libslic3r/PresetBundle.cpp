@@ -59,6 +59,12 @@ PresetBundle::PresetBundle()
     , printers(Preset::TYPE_PRINTER, Preset::printer_options(), static_cast<const PrintRegionConfig &>(FullPrintConfig::defaults()), "Default Printer")
     , physical_printers(PhysicalPrinter::printer_options())
 {
+    prints.m_owner = this;
+    sla_prints.m_owner = this;
+    filaments.m_owner = this;
+    sla_materials.m_owner = this;
+    printers.m_owner = this;
+
     // The following keys are handled by the UI, they do not have a counterpart in any StaticPrintConfig derived classes,
     // therefore they need to be handled differently. As they have no counterpart in StaticPrintConfig, they are not being
     // initialized based on PrintConfigDef(), but to empty values (zeros, empty vectors, empty strings).
@@ -129,8 +135,16 @@ PresetBundle& PresetBundle::operator=(const PresetBundle &rhs)
     printers            = rhs.printers;
     physical_printers   = rhs.physical_printers;
 
+    prints.m_owner = this;
+    sla_prints.m_owner = this;
+    filaments.m_owner = this;
+    sla_materials.m_owner = this;
+    printers.m_owner = this;
+
     filament_presets    = rhs.filament_presets;
     project_config      = rhs.project_config;
+    m_has_project_def = rhs.m_has_project_def;
+    m_is_belt_project = rhs.m_is_belt_project;
     vendors             = rhs.vendors;
     obsolete_presets    = rhs.obsolete_presets;
     m_errors    = rhs.m_errors;

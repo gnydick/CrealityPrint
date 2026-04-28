@@ -41,6 +41,7 @@
 #include "slic3r/GUI/Gizmos/GLGizmoMeshBoolean.hpp"
 #include "slic3r/GUI/Gizmos/GLGizmoPainterBase.hpp"
 #include "slic3r/GUI/Gizmos/GLGizmoEmboss.hpp"
+#include "slic3r/GUI/AnalyticsDataUploadManager.hpp"
 #include "slic3r/Utils/UndoRedo.hpp"
 #include "slic3r/Utils/MacDarkMode.hpp"
 #include "slic3r/Config/DispConfig.h"
@@ -1863,6 +1864,10 @@ void GLCanvas3D::adaptive_layer_height_profile(float quality_factor)
     m_layers_editing.adaptive_layer_height_profile(*this, quality_factor);
     m_layers_editing.state = LayersEditing::Completed;
     m_dirty                = true;
+    
+    // 【新增】标记几何体修改（细节/速度应用）
+    AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+        .mark_modified(AnalyticsDataUploadManager::ModelModifyType::VARIABLE_LAYER);
 }
 
 void GLCanvas3D::smooth_layer_height_profile(const HeightProfileSmoothingParams& smoothing_params)
@@ -1871,6 +1876,10 @@ void GLCanvas3D::smooth_layer_height_profile(const HeightProfileSmoothingParams&
     m_layers_editing.smooth_layer_height_profile(*this, smoothing_params);
     m_layers_editing.state = LayersEditing::Completed;
     m_dirty                = true;
+    
+    // 【新增】标记几何体修改（平滑模式应用）
+    AnalyticsDataUploadManager::ProjectModificationTracker::getInstance()
+        .mark_modified(AnalyticsDataUploadManager::ModelModifyType::VARIABLE_LAYER);
 }
 
 bool GLCanvas3D::is_reload_delayed() const { return m_reload_delayed; }
@@ -3491,7 +3500,7 @@ void GLCanvas3D::on_idle(wxIdleEvent& evt)
 // for testing only
 #if 0
     bool always_render = wxGetApp().app_config->get_bool("render_mode");
-    if (always_render) {
+	if (always_render) {
         request_extra_frame();
         m_dirty |= always_render;
 	}
@@ -6605,7 +6614,7 @@ bool GLCanvas3D::draw_input_int_v2(const std::string& label, int* v, int stride,
     // 记录输入前的值
     int v_before = *v;
 
-    bool drag_input = ImGui::DragScalarV2(label.c_str(), ImGuiDataType_S32, v, stride, p_min, p_max);
+    bool drag_input = ImGui::InputScalar(label.c_str(), ImGuiDataType_S32, v, nullptr, nullptr, "%d");
 
     // 实时限制输入值在范围内，并且如果超出范围，立刻回退显示
     bool clamped = false;
@@ -6963,6 +6972,13 @@ bool GLCanvas3D::_render_object_clone_options(float left, float right, float bot
     // bool b_spacing_input = ImGui::BBLDragFloat("##spacing_input", &settings.distance, 0.05f, 0.0f, 0.0f, "%.2f");
 
     ImGui::SameLine(0.f);
+    if (m_clone_settings.focus_input_on_open_frames > 0) {
+        --m_clone_settings.focus_input_on_open_frames;
+        request_extra_frame();
+    } else if (m_clone_settings.focus_input_on_open_frames == 0) {
+        ImGui::SetKeyboardFocusHere(0);
+        m_clone_settings.focus_input_on_open_frames = -1;
+    }
     bool input_number_change = draw_input_int_v2("##Number of copies2:", &m_clone_settings.clone_num, 1, &v_min, &v_max,
                                                  Vec2d(70.f * get_scale(), 30.f));
 
@@ -7256,6 +7272,7 @@ void GLCanvas3D::triger_extra_render_event(ERenderEvent render_event)
             m_extra_render_callbacks[index] = [this]() { this->_render_object_clone_options(0, 0, 100, 100); };
             m_selection.copy_to_clipboard();
             m_clone_settings.clone_num = 1;
+            m_clone_settings.focus_input_on_open_frames = 2;
             m_selection.calculate_clone_preview_offsets(m_clone_settings.clone_num);
             m_main_toolbar.on_set_virtual_item("virtual-clone-item");
         }
@@ -12860,26 +12877,31 @@ void GLCanvas3D::_set_warning_notification_if_needed(EWarning warning)
                            ((m_gcode_viewer.get_layers_zs()[max_z_layer] - m_gcode_viewer.get_max_print_height() >= 1e-6) &&
                             m_gcode_viewer.get_max_print_height() >= 1e-6 && !wxGetApp().preset_bundle->machine_is_belt());
                 else if (warning == EWarning::ToolpathOutside) { // check if max x,y coords exceed bed area
-                    /*show = !m_gcode_viewer.is_contained_in_bed();*/
-                    if (m_gcode_viewer.has_printable_area()) {
-                        BoundingBoxf3 plater_box     = m_gcode_viewer.get_printable_area();
-                        BoundingBoxf3 Previewbox     = m_gcode_viewer.get_paths_bounding_box_ex();
-                        BoundingBoxf3 shellbox       = m_gcode_viewer.get_shell_bounding_box();
-                        BoundingBoxf3 maxboundingbox = m_gcode_viewer.get_max_bounding_box();
-                        show = m_gcode_viewer.has_data() && plater_box.max.x() > 0 && !plater_box.contains(Previewbox);
+                    const bool has_data            = m_gcode_viewer.has_data();
+                    const bool outside_by_fallback = has_data && (m_gcode_viewer.is_toolpath_outside() || !m_gcode_viewer.is_contained_in_bed());
+
+                    if (has_data && m_gcode_viewer.has_printable_area()) {
+                        // If G-code carries source printable area (3505 path), prefer that geometry check.
+                        BoundingBoxf3 plater_box  = m_gcode_viewer.get_printable_area();
+                        BoundingBoxf3 preview_box = m_gcode_viewer.get_paths_bounding_box_ex();
+                        if (plater_box.max.x() > 0)
+                            show = !plater_box.contains(preview_box);
+                        else
+                            show = outside_by_fallback;
                     } else {
-                        bool is_belt_printer = wxGetApp().preset_bundle->machine_is_belt();
-                        show = m_gcode_viewer.has_data() && !m_gcode_viewer.is_contained_in_bed() &&
-                               (is_belt_printer || (m_gcode_viewer.get_max_print_height() - m_gcode_viewer.get_layers_zs()[max_z_layer] >= 1e-6));
+                        // Fallback to slice result / bed containment when source printable area is unavailable.
+                        show = outside_by_fallback;
                     }
 
                     if (m_gcode_viewer.get_extruders_count() > 1 && !show) {
-                        GUI::PartPlate*      curr_plate = GUI::wxGetApp().plater()->get_partplate_list().get_selected_plate();
-                        bool                 is_multi_color;
-                        const BoundingBoxf3& exclude_area = curr_plate->color_bed_exclude_area(&is_multi_color);
-                        if (exclude_area.area() > 0) {
-                            BoundingBoxf3 Previewbox = m_gcode_viewer.get_paths_bounding_box_ex();
-                            show                     = exclude_area.intersects(Previewbox) || exclude_area.contains(Previewbox);
+                        GUI::PartPlate* curr_plate = GUI::wxGetApp().plater()->get_partplate_list().get_selected_plate();
+                        if (curr_plate != nullptr) {
+                            bool                 is_multi_color = false;
+                            const BoundingBoxf3& exclude_area   = curr_plate->color_bed_exclude_area(&is_multi_color);
+                            if (exclude_area.area() > 0) {
+                                BoundingBoxf3 preview_box = m_gcode_viewer.get_paths_bounding_box_ex();
+                                show                      = exclude_area.intersects(preview_box) || exclude_area.contains(preview_box);
+                            }
                         }
                     }
                 } 

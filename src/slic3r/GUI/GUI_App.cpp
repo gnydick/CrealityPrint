@@ -7557,7 +7557,7 @@ std::string GUI_App::handle_web_request(std::string cmd)
                 auto send_result = [this](int result) {
                     nlohmann::json commandJson;
                     commandJson["command"] = "set_deviceAdd_end";
-                    commandJson["data"]    = result;
+                    commandJson["data"]["result"] = result;
 
                     wxString strJS = wxString::Format("handleStudioCmd(%s)", commandJson.dump(-1, ' ', true));
                     wxGetApp().CallAfter([this, strJS,result] { 
@@ -7782,6 +7782,48 @@ std::string GUI_App::handle_web_request(std::string cmd)
                     tour_timer->StartOnce(1000);
                 });
 
+            } else if (command_str.compare("finish_bind_device_guide") == 0) {
+                auto send_result = [this](int result) {
+                    nlohmann::json commandJson;
+                    commandJson["command"] = "finish_bind_device_guide";
+                    commandJson["data"]["result"] = result;
+
+                    wxString strJS = wxString::Format("handleStudioCmd(%s)", commandJson.dump(-1, ' ', true));
+                    wxGetApp().CallAfter([this, strJS, result] {
+                        run_script(strJS.ToStdString());
+                        if (result) {
+                            this->reload_homepage();
+                        }
+                    });
+                };
+
+                app_config->set("is_first_install", "1");
+                mainframe->select_tab(size_t(MainFrame::tp3DEditor));
+                mainframe->m_topbar->SetSelection(size_t(MainFrame::tp3DEditor));
+                send_result(1);
+                CallAfter([this] {
+                    std::shared_ptr<wxTimer> tour_timer = std::make_shared<wxTimer>();
+                    tour_timer->Bind(wxEVT_TIMER, [this, tour_timer](wxTimerEvent&) {
+                        tour_timer->Stop();
+#ifdef __APPLE__
+                        wxPlatformInfo platformInfo;
+                        int major = platformInfo.GetOSMajorVersion();
+                        if (major >= 15) {
+                            startTour();
+                        } else {
+                            startTour_Apple();
+                        }
+                        mainframe->topbar()->EnableGuideModeItemsMac();
+                        Slic3r::macos_set_menu_bar_hidden(false);
+#elif defined(__linux__) || defined(__LINUX__)
+                        startTour_Apple();
+#else
+                        startTour();
+                        mainframe->topbar()->EnableGuideModeItems();
+#endif
+                    });
+                    tour_timer->StartOnce(1000);
+                });
             } else if (command_str.compare("get_devices_info") == 0) {
                 json res;
                 webGetDevicesInfo(res);
@@ -8518,6 +8560,23 @@ void GUI_App::check_new_version_cx_updated(bool show_tips, int by_user)
                 std::regex matcher("[0-9]+\\.[0-9]+(\\.[0-9]+)*(-[A-Za-z0-9]+)?(\\+[A-Za-z0-9]+)?");
                 Semver current_version = get_version(CREALITYPRINT_VERSION, matcher);
                 Semver remote_version = get_version(version, matcher);
+
+                // Helper lambda to check if patch starts with '0' and reset it to 0
+                auto adjust_patch_if_zero_leading = [](Semver& ver, const std::string& ver_str) {
+                    // Extract patch part from version string (e.g., "1.2.034" -> "034")
+                    static const std::regex patch_regex(R"(^[Vv]?([0-9]+)\.([0-9]+)\.([0-9]+))");
+                    std::smatch match;
+                    if (std::regex_search(ver_str, match, patch_regex)) {
+                        std::string patch_str = match[3].str();
+                        // If patch starts with '0' and has more digits, treat as 0
+                        if (!patch_str.empty() && patch_str[0] == '0' && patch_str.length() > 1) {
+                            ver.set_patch(0);
+                        }
+                    }
+                };
+
+                // Adjust patch for both versions if it starts with '0'
+                adjust_patch_if_zero_leading(current_version, std::string(CREALITYPRINT_VERSION));
                 
                 if (remote_version <= current_version) {
                     if (show_tips) {
@@ -9052,6 +9111,25 @@ int GUI_App::get_3mf_download_progress(const std::string& user_id, const std::st
         }
     }
     return 0;
+}
+
+std::string GUI_App::get_3mf_download_path(const std::string& user_id, const std::string& file_id)
+{
+    auto it = model_downloaders_.find(user_id);
+    if (it == model_downloaders_.cend())
+        return {};
+
+    auto cache_json = it->second->get_cache_json();
+    if (cache_json.is_object() && cache_json.contains("3mfs")) {
+        for (auto &file : cache_json["3mfs"]) {
+            try {
+                const std::string fid = file["fileId"].get<std::string>();
+                if (fid == file_id && file.contains("path"))
+                    return file["path"].get<std::string>();
+            } catch (...) {}
+        }
+    }
+    return {};
 }
 
 void GUI_App::cancel_3mf_download(const std::string& user_id, const std::string& file_id)

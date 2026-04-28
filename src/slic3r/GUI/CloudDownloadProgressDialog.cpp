@@ -107,10 +107,23 @@ void CloudDownloadProgressDialog::on_timer(wxTimerEvent &)
 
     if (percent >= 100) {
         m_finished = true;
-        m_status_bar->change_button_label(_L("Close"));
         m_timer.Stop();
+
+        // Retrieve the downloaded file path before closing, so we can trigger
+        // import after the dialog is fully gone.
+        std::string file_path = wxGetApp().get_3mf_download_path(m_user_id, m_file_id);
+
+        // Close the dialog first, then schedule the import via CallAfter so
+        // the download progress dialog is fully destroyed before the import
+        // progress dialog appears — preventing two dialogs from overlapping.
         if (IsModal()) EndModal(wxID_CLOSE);
         else Close();
+
+        if (!file_path.empty()) {
+            wxTheApp->CallAfter([file_path]() {
+                wxGetApp().request_model_download(wxString::FromUTF8(file_path.c_str()));
+            });
+        }
     }
 }
 

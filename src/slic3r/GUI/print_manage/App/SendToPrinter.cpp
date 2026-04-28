@@ -232,6 +232,11 @@ void CxSentToPrinterDialog::bind_events()
     RegisterHandler("send_start_print_cmd", [this](const nlohmann::json& json_data) {
         this->handle_send_start_print_cmd(json_data);
     });
+
+    RegisterHandler("cxy_print_log", [this](const nlohmann::json& json_data) {
+        BOOST_LOG_TRIVIAL(warning) << "cxy_print_log - " << json_data.dump();
+    });
+
     /*
     // Handle new device_detail_print command (same as DeviceMgrRoutes)
     RegisterHandler("send_page_print", [this](const nlohmann::json& json_data) {
@@ -2111,7 +2116,8 @@ bool CxSentToPrinterDialog::save_user_operation_state(const nlohmann::json& stat
 nlohmann::json CxSentToPrinterDialog::load_user_operation_state() const
 {
     nlohmann::json default_state = {
-        {"print_calibration", 1}
+        {"print_calibration", 1},
+        {"customColorList", nlohmann::json::array()}
     };
 
     try {
@@ -2149,6 +2155,46 @@ nlohmann::json CxSentToPrinterDialog::load_user_operation_state() const
         }
 
         parsed["print_calibration"] = (print_calibration == 1) ? 1 : 0;
+
+        nlohmann::json custom_color_list = nlohmann::json::array();
+        try {
+            if (parsed.contains("customColorList") && parsed["customColorList"].is_array()) {
+                const auto is_valid_slot_value = [](const nlohmann::json& value) {
+                    return value.is_string() || value.is_number_integer() || value.is_number_unsigned();
+                };
+                for (const auto& item : parsed["customColorList"]) {
+                    if (!item.is_object())
+                        continue;
+                    if (!item.contains("address") || !item["address"].is_string())
+                        continue;
+                    if (!item.contains("boxType") || !is_valid_slot_value(item["boxType"]))
+                        continue;
+                    if (!item.contains("boxId") || !is_valid_slot_value(item["boxId"]))
+                        continue;
+                    if (!item.contains("materialId") || !is_valid_slot_value(item["materialId"]))
+                        continue;
+                    if (!item.contains("customColor") || !item["customColor"].is_string())
+                        continue;
+
+                    const auto address      = item["address"].get<std::string>();
+                    const auto custom_color = item["customColor"].get<std::string>();
+                    if (address.empty() || custom_color.empty())
+                        continue;
+
+                    custom_color_list.push_back({
+                        {"address", address},
+                        {"boxType", item["boxType"]},
+                        {"boxId", item["boxId"]},
+                        {"materialId", item["materialId"]},
+                        {"customColor", custom_color}
+                    });
+                }
+            }
+        } catch (...) {
+            custom_color_list = nlohmann::json::array();
+        }
+
+        parsed["customColorList"] = custom_color_list;
         return parsed;
     } catch (const std::exception& e) {
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to load state, error=" << e.what();
@@ -2203,6 +2249,7 @@ void CxSentToPrinterDialog::handle_request_user_operation_state(const nlohmann::
     wxString strJS = wxString::Format("window.handleStudioCmd('%s');", RemotePrint::Utils::url_encode(commandJson.dump(-1, ' ', true)));
     run_script(strJS.ToStdString());
 }
+
 bool CxSentToPrinterDialog::LoadFile(std::string jPath, std::string &sContent)
 {
     try {

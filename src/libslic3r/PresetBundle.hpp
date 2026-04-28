@@ -314,21 +314,30 @@ public:
 
     inline bool machine_is_belt() 
     {
-        if (project_config.has("machine_is_belt"))
-        {
-            return project_config.opt_bool("machine_is_belt");
-        }
-        else
-        {
-            auto config = &printers.get_edited_preset().config;
-            return config->opt_bool("machine_is_belt");
-        }
+        return m_has_project_def ? m_is_belt_project : m_is_belt_preset;
+    }
+
+    void set_project_machine_is_belt(bool value)
+    {
+        m_has_project_def = true;
+        m_is_belt_project = value;
+        project_config.set_key_value("machine_is_belt", new ConfigOptionBool(value));
+    }
+
+    void clear_project_machine_is_belt()
+    {
+        m_has_project_def = false;
+        m_is_belt_project = false;
+        project_config.erase("machine_is_belt");
     }
 
 public:
     std::string m_curPrinterPresetName  = "";
     std::string m_curFilamentPresetName = "";
     std::string m_curProcessPresetName  = "";
+    bool m_is_belt_preset { false };
+    bool m_has_project_def { false };
+    bool m_is_belt_project { false };
 
 private:
     //std::pair<PresetsConfigSubstitutions, std::string> load_system_presets(ForwardCompatibilitySubstitutionRule compatibility_rule);

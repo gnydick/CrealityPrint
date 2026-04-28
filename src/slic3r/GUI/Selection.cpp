@@ -3156,16 +3156,16 @@ void Selection::paste_from_clipboard()
 }
 
 //BBS get export mesh for exporting stl
-std::set<std::pair<int, int>> Selection::get_selected_object_instances()
+std::set<std::pair<int, int>> Selection::get_selected_object_instances() const
 {
     std::set<std::pair<int, int>> instances_idxs;
     // BBS only support multi full object now
     if (!is_multiple_full_object())
         return instances_idxs;
 
-    for (ObjectIdxsToInstanceIdxsMap::iterator obj_it = m_cache.content.begin(); obj_it != m_cache.content.end(); ++obj_it)
+    for (ObjectIdxsToInstanceIdxsMap::const_iterator obj_it = m_cache.content.cbegin(); obj_it != m_cache.content.cend(); ++obj_it)
     {
-        for (InstanceIdxsList::reverse_iterator inst_it = obj_it->second.rbegin(); inst_it != obj_it->second.rend(); ++inst_it)
+        for (InstanceIdxsList::const_reverse_iterator inst_it = obj_it->second.crbegin(); inst_it != obj_it->second.crend(); ++inst_it)
         {
             instances_idxs.insert(std::make_pair(obj_it->first, *inst_it));
         }

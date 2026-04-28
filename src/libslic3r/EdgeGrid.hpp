@@ -172,6 +172,9 @@ public:
     void visit_intersect_line_impl(coord_t ix, coord_t iy, Point p1, coord_t ixb, coord_t iyb, Point p2, VISITOR& visitor) const
     {
         // Account for the end points.
+        // 防御性检查：确保起点在有效范围内
+        if (ix < 0 || ix >= m_cols || iy < 0 || iy >= m_rows)
+            return;
         if (!visitor(iy, ix) || (ix == ixb && iy == iyb))
             // Both ends fall into the same cell.
             return;
@@ -204,6 +207,9 @@ public:
                         iy += 1;
                         assert(iy <= iyb);
                     }
+                    // 防御性检查：确保新的坐标在有效范围内
+                    if (ix < 0 || ix >= m_cols || iy < 0 || iy >= m_rows)
+                        return;
                     if (!visitor(iy, ix))
                         return;
                 } while (ix != ixb || iy != iyb);
@@ -223,6 +229,9 @@ public:
                         iy -= 1;
                         assert(iy >= iyb);
                     }
+                    // 防御性检查：确保新的坐标在有效范围内
+                    if (ix < 0 || ix >= m_cols || iy < 0 || iy >= m_rows)
+                        return;
                     if (!visitor(iy, ix))
                         return;
                 } while (ix != ixb || iy != iyb);
@@ -246,6 +255,9 @@ public:
                         iy += 1;
                         assert(iy <= iyb);
                     }
+                    // 防御性检查：确保新的坐标在有效范围内
+                    if (ix < 0 || ix >= m_cols || iy < 0 || iy >= m_rows)
+                        return;
                     if (!visitor(iy, ix))
                         return;
                 } while (ix != ixb || iy != iyb);
@@ -280,6 +292,9 @@ public:
                         iy -= 1;
                         assert(iy >= iyb);
                     }
+                    // 防御性检查：确保新的坐标在有效范围内
+                    if (ix < 0 || ix >= m_cols || iy < 0 || iy >= m_rows)
+                        return;
                     if (!visitor(iy, ix))
                         return;
                 } while (ix != ixb || iy != iyb);

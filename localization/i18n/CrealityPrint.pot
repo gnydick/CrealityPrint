@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-03-20 08:58+0800\n"
+"POT-Creation-Date: 2026-04-17 10:23+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -2328,6 +2328,12 @@ msgstr ""
 msgid "Acceleration of travel moves"
 msgstr ""
 
+msgid "Initial layer travel"
+msgstr ""
+
+msgid "The acceleration of travel of initial layer"
+msgstr ""
+
 msgid ""
 "Acceleration of top surface infill. Using a lower value may improve top "
 "surface quality"
@@ -3321,7 +3327,7 @@ msgid ""
 "Default value of 3 works well for most cases. If your printer is stuttering, "
 "increase this value to reduce the number of adjustments made\n"
 "\n"
-"Allowed values: 1-5"
+"Allowed values: 0.5-5"
 msgstr ""
 
 msgid "Material shortage recovery after overhang(Beta)"
@@ -6178,6 +6184,53 @@ msgstr ""
 msgid ""
 "Detects clogging and filament grinding, halting printing immediately to "
 "conserve time and filament."
+msgstr ""
+
+msgid "Downloading Update"
+msgstr ""
+
+msgid "Preparing to download..."
+msgstr ""
+
+msgid "Downloading"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid "%s (%d%% Completed)"
+msgstr ""
+
+msgid "Update Ready"
+msgstr ""
+
+msgid "Update downloaded successfully. Install now?"
+msgstr ""
+
+msgid "Install Later"
+msgstr ""
+
+msgid "Install Now"
+msgstr ""
+
+msgid "Update Failed"
+msgstr ""
+
+msgid "An error occurred during download."
+msgstr ""
+
+msgid "Retry"
+msgstr ""
+
+#, possible-c-format, possible-boost-format
+msgid "Downloading ... %d%%"
+msgstr ""
+
+msgid "Failed to locate updater executable."
+msgstr ""
+
+msgid "Update Error"
+msgstr ""
+
+msgid "Failed to prepare updater executable."
 msgstr ""
 
 msgid "Add File"
@@ -9489,6 +9542,9 @@ msgstr ""
 msgid "Remember my choice"
 msgstr ""
 
+msgid "Update"
+msgstr ""
+
 #, possible-c-format, possible-boost-format
 msgid "Click to download new version in default browser: %s"
 msgstr ""
@@ -9559,6 +9615,26 @@ msgstr ""
 msgid ""
 "The version of Creality Print is too low and needs to be updated to the "
 "latest version before it can be used normally"
+msgstr ""
+
+msgid ""
+"Network connection timed out. Please check your network settings and try "
+"again."
+msgstr ""
+
+msgid "Failed to check for updates."
+msgstr ""
+
+msgid "No valid update packages found."
+msgstr ""
+
+msgid "Failed to parse update information."
+msgstr ""
+
+msgid "Invalid response format."
+msgstr ""
+
+msgid "Insufficient storage space. Please free up some space and try again."
 msgstr ""
 
 msgid "User Experience Improvement Program"
@@ -10332,9 +10408,6 @@ msgid "Download"
 msgstr ""
 
 msgid "Download waiting..."
-msgstr ""
-
-msgid "Retry"
 msgstr ""
 
 msgid "Download failed"
@@ -11443,9 +11516,6 @@ msgstr ""
 msgid "Status"
 msgstr ""
 
-msgid "Update"
-msgstr ""
-
 msgid "Speed:"
 msgstr ""
 
@@ -11749,10 +11819,10 @@ msgstr[1] ""
 msgid "ERROR"
 msgstr ""
 
-msgid "COMPLETED"
+msgid "CANCELED"
 msgstr ""
 
-msgid "CANCELED"
+msgid "COMPLETED"
 msgstr ""
 
 msgid "Cancel upload"
@@ -14318,6 +14388,12 @@ msgstr ""
 msgid "Select presets to compare"
 msgstr ""
 
+msgid "Left Preset Value"
+msgstr ""
+
+msgid "Right Preset Value"
+msgstr ""
+
 msgid ""
 "You can only transfer to current active profile because it has been modified."
 msgstr ""
@@ -14884,6 +14960,12 @@ msgid ""
 "Drag to move the cut plane"
 msgstr ""
 
+msgid ""
+"Click to flip the cut plane\n"
+"Drag to move the cut plane\n"
+"Right-click a part to assign it to the other side"
+msgstr ""
+
 msgid "Move cut plane"
 msgstr ""
 
@@ -14894,6 +14976,12 @@ msgid "Change cut mode"
 msgstr ""
 
 msgid "Draw cut line"
+msgstr ""
+
+msgid "right click"
+msgstr ""
+
+msgid "Assign the part to the other side"
 msgstr ""
 
 msgid "Rotate cut plane"
@@ -16288,9 +16376,6 @@ msgstr ""
 msgid "Please check your object list before preset changing."
 msgstr ""
 
-msgid "Downloading"
-msgstr ""
-
 msgid "Install successfully."
 msgstr ""
 
@@ -17011,39 +17096,4 @@ msgid ""
 "Compared with the default profile of a 0.8 mm nozzle, it has a smaller layer "
 "height, and results in less but still apparent layer lines and slightly "
 "higher printing quality, but longer printing time in some printing cases."
-msgstr ""
-msgid "Update Servers Connected Timeout"
-msgstr ""
-
-msgid "Failed to check for updates."
-msgstr ""
-
-msgid "Invalid response format."
-msgstr ""
-
-msgid "No valid update packages found."
-msgstr ""
-
-msgid "Failed to parse update information."
-msgstr ""
-
-msgid "Preparing to download..."
-msgstr ""
-
-msgid "Downloading Update"
-msgstr ""
-
-msgid "%s (%d%% Completed)"
-msgstr ""
-
-msgid "Update Ready"
-msgstr ""
-
-msgid "Update downloaded successfully. Install now?"
-msgstr ""
-
-msgid "Install Later"
-msgstr ""
-
-msgid "Install Now"
 msgstr ""

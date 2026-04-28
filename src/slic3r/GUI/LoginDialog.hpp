@@ -23,6 +23,7 @@ public:
 
     // 显示登录对话框
     void ShowLoginDialog(const wxString& loginUrl = wxEmptyString);
+    void MarkLoginSucceeded();
 
 private:
     // 事件处理函数
@@ -54,6 +55,8 @@ private:
 
     
     wxString m_loginUrl;
+    bool     m_login_succeeded { false };
+    bool     m_close_event_sent { false };
     
     // 声明事件表
     wxDECLARE_EVENT_TABLE();

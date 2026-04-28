@@ -2684,15 +2684,15 @@ High_Flowrate_Dlg::High_Flowrate_Dlg(wxWindow* parent, wxWindowID id, Plater* pl
     m_btn7         = new ImgBtn(this, wxEmptyString, "calib_15", wxDefaultPosition, btnSize, wxTE_PROCESS_ENTER);
     m_btn8         = new ImgBtn(this, wxEmptyString, "calib_20", wxDefaultPosition, btnSize, wxTE_PROCESS_ENTER);
 
-    m_btn0->Bind(wxEVT_LEFT_DOWN, ([this](auto& e) { e.Skip(); m_CurrentValue = 0.8; }));
-    m_btn1->Bind(wxEVT_LEFT_DOWN, ([this](auto& e) { e.Skip(); m_CurrentValue = 0.85; }));
-    m_btn2->Bind(wxEVT_LEFT_DOWN, ([this](auto& e) { e.Skip(); m_CurrentValue = 0.9; }));
-    m_btn3->Bind(wxEVT_LEFT_DOWN, ([this](auto& e) { e.Skip(); m_CurrentValue = 0.95; }));
-    m_btn4->Bind(wxEVT_LEFT_DOWN, ([this](auto& e) { e.Skip(); m_CurrentValue = 1.0; }));
-    m_btn5->Bind(wxEVT_LEFT_DOWN, ([this](auto& e) { e.Skip(); m_CurrentValue = 1.05; }));
-    m_btn6->Bind(wxEVT_LEFT_DOWN, ([this](auto& e) { e.Skip(); m_CurrentValue = 1.1; }));
-    m_btn7->Bind(wxEVT_LEFT_DOWN, ([this](auto& e) { e.Skip(); m_CurrentValue = 1.15; }));
-    m_btn8->Bind(wxEVT_LEFT_DOWN, ([this](auto& e) { e.Skip(); m_CurrentValue = 1.2; }));
+    m_option_buttons = {m_btn0, m_btn1, m_btn2, m_btn3, m_btn4, m_btn5, m_btn6, m_btn7, m_btn8};
+
+    for (size_t i = 0; i < m_option_buttons.size(); ++i) {
+        m_option_buttons[i]->Bind(wxEVT_LEFT_UP, [this, i](wxMouseEvent& e) {
+            if (wxRect(wxPoint(0, 0), m_option_buttons[i]->GetClientSize()).Contains(e.GetPosition()))
+                set_selected_option(static_cast<int>(i));
+            e.Skip();
+        });
+    }
 
     StateColor btn_bg_green(std::pair<wxColour, int>(wxColour(255, 255, 255), StateColor::Disabled),
                          std::pair<wxColour, int>(wxColour(206, 206, 206), StateColor::Pressed),
@@ -2770,6 +2770,8 @@ High_Flowrate_Dlg::High_Flowrate_Dlg(wxWindow* parent, wxWindowID id, Plater* pl
     buttonsSizer->Add(cancelButton);
     v_sizer->AddSpacer(FromDIP(15));
     v_sizer->Add(buttonsSizer, 1, wxALL | wxALIGN_CENTRE_HORIZONTAL, 0);
+    set_selected_option(0);
+
 
     wxGetApp().UpdateDlgDarkUI(this);
     Layout();
@@ -2778,6 +2780,22 @@ High_Flowrate_Dlg::High_Flowrate_Dlg(wxWindow* parent, wxWindowID id, Plater* pl
 
 High_Flowrate_Dlg::~High_Flowrate_Dlg()
 {
+}
+
+void High_Flowrate_Dlg::set_selected_option(int index)
+{
+    static constexpr std::array<float, 9> option_values = {0.8f, 0.85f, 0.9f, 0.95f, 1.0f, 1.05f, 1.1f, 1.15f, 1.2f};
+
+    if (index < 0 || index >= static_cast<int>(m_option_buttons.size()))
+        return;
+
+    m_selected_index = index;
+    m_CurrentValue   = option_values[static_cast<size_t>(index)];
+
+    for (size_t i = 0; i < m_option_buttons.size(); ++i) {
+        if (m_option_buttons[i] != nullptr)
+            m_option_buttons[i]->SetSelected(static_cast<int>(i) == m_selected_index);
+    }
 }
 
 void High_Flowrate_Dlg::on_dpi_changed(const wxRect& suggested_rect)

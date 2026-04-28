@@ -164,11 +164,12 @@ private:
         if (m_hover || m_pressed) {
             const wxSize size = GetClientSize();
             const int w = std::max(1, m_border_width);
+            const int inset = w / 2;
             const int width = std::max(0, size.x - w);
             const int height = std::max(0, size.y - w);
             dc.SetBrush(*wxTRANSPARENT_BRUSH);
             dc.SetPen(wxPen(m_border_color.IsOk() ? m_border_color : wxColour("#15BF59"), w));
-            dc.DrawRectangle(w / 2, w / 2, width, height);
+            dc.DrawRectangle(inset + 1, inset, width, height);
         }
     }
 
@@ -490,6 +491,8 @@ bool AppUpdateProgressDialog::Show(bool show)
     if (show) {
         close_imgui_notification();
         apply_theme();
+        // Ensure dialog is centered on screen when showing
+        CentreOnParent();
         if (wxGetApp().plater() && wxGetApp().plater()->get_current_canvas3D())
             wxGetApp().plater()->get_current_canvas3D()->schedule_extra_frame(0);
     }
@@ -610,6 +613,15 @@ void AppUpdateFinishDialog::on_dpi_changed(const wxRect& suggested_rect)
     SetSize(suggested_rect.GetSize());
     apply_theme();
     Refresh();
+}
+
+bool AppUpdateFinishDialog::Show(bool show)
+{
+    if (show) {
+        // Ensure dialog is centered on parent when showing
+        CentreOnParent();
+    }
+    return DPIDialog::Show(show);
 }
 
 void AppUpdateFinishDialog::apply_theme()

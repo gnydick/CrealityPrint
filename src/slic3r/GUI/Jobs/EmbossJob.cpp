@@ -1135,10 +1135,21 @@ void create_volume(TriangleMesh                    &&mesh,
     // So first add simple shape(convex hull is also calculated)
     ModelVolume *volume = obj->add_volume(make_cube(1., 1., 1.), type);
 
-    // TODO: Refactor to create better way to not set cube at begining
-    // Revert mesh centering by set mesh after add cube
-    volume->set_mesh(std::move(mesh));
-    volume->calculate_convex_hull();
+    // Suppress the background-process timer while we swap the mesh and
+    // recalculate the convex hull.  Between set_mesh() and
+    // calculate_convex_hull() the convex hull is temporarily stale (still
+    // the unit-cube hull), so if the 500 ms timer fired here it would call
+    // update_volume_bboxes() with an empty / mismatched convex hull and
+    // crash inside transformed_its_bbox2d().
+    // SuppressBackgroundProcessingUpdate uses RAII: the destructor
+    // automatically re-schedules the timer, so no manual "re-enable" needed.
+    {
+        SuppressBackgroundProcessingUpdate suppress;
+        // TODO: Refactor to create better way to not set cube at begining
+        // Revert mesh centering by set mesh after add cube
+        volume->set_mesh(std::move(mesh));
+        volume->calculate_convex_hull();
+    }
 
     // set a default extruder value, since user can't add it manually
     volume->config.set_key_value("extruder", new ConfigOptionInt(0));

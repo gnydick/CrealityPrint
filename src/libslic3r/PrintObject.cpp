@@ -482,7 +482,7 @@ void PrintObject::make_perimeters()
             for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++layer_idx) {
                 m_print->throw_if_canceled();
                 if (layer_idx > 1) {
-                    Layer& prev_layer = *m_layers[layer_idx - 1];
+                    //Layer& prev_layer = *m_layers[layer_idx - 1];
                     m_layers[layer_idx]->calculate_perimeter_continuity(m_layers[layer_idx - 1]->loop_nodes);
                 }
             }
@@ -508,7 +508,7 @@ void PrintObject::make_perimeters()
             for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++layer_idx) {
                 m_print->throw_if_canceled();
                 if (layer_idx >= 1) {
-                    Layer& prev_layer = *m_layers[layer_idx - 1];
+                    //Layer& prev_layer = *m_layers[layer_idx - 1];
                     m_layers[layer_idx]->record_cooling_node_for_each_extrusion();
                 }
             }

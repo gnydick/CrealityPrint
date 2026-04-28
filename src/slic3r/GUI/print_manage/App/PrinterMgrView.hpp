@@ -89,6 +89,13 @@ namespace Slic3r {
         private:
             void SendAPIKey();
             std::string get_plate_data_on_show();
+            std::string get_user_operation_state_file_path() const;
+            bool save_user_operation_state(const nlohmann::json& state_data);
+            nlohmann::json load_user_operation_state() const;
+            void handle_save_user_operation_state(const nlohmann::json& json_data);
+            void handle_request_user_operation_state(const nlohmann::json& json_data);
+            void handle_get_user_custom_color_list(const nlohmann::json& json_data);
+            void handle_set_user_custom_color_list(const nlohmann::json& json_data);
             void handle_set_device_relate_to_account(const nlohmann::json& json_data);
             void handle_request_update_device_relate_to_account(const nlohmann::json& json_data);
         private:

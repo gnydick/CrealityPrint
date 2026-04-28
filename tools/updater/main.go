@@ -107,6 +107,9 @@ var (
 	procSetBkColor                 = modGdi32.NewProc("SetBkColor")
 	procSetBkMode                  = modGdi32.NewProc("SetBkMode")
 	procGetStockObject             = modGdi32.NewProc("GetStockObject")
+	procMoveToEx                   = modGdi32.NewProc("MoveToEx")
+	procLineTo                     = modGdi32.NewProc("LineTo")
+	procGetParent                  = modUser32.NewProc("GetParent")
 
 	procRegGetValueW = modAdvapi32.NewProc("RegGetValueW")
 
@@ -181,6 +184,7 @@ const (
 	iccProgressClass = 0x00000020
 
 	bkTransparent  = 1
+	bnClicked      = 0
 	defaultGuiFont = 17
 	htCaption      = 2
 
@@ -1055,15 +1059,27 @@ func drawButton(hwnd uintptr, hdc uintptr, st *btnState) {
 	fillColor := gTheme.btnFill
 
 	if st.isClose {
-		// 关闭按钮无边框，背景色与窗口一致
-		borderColor = gTheme.bg
+		// 关闭按钮：永远无边框，背景色与窗口一致
 		fillColor = gTheme.bg
+		borderColor = fillColor // 边框与背景一致，无边框效果
 		if !enabled {
 			textColor = gTheme.textDisabled
 		} else if st.down {
-			fillColor = gTheme.btnFillPressed
+			// 按下时背景稍微变化
+			if gTheme.isLight {
+				fillColor = rgb(0xE7, 0xEC, 0xF4)
+			} else {
+				fillColor = rgb(0x35, 0x42, 0x55)
+			}
+			borderColor = fillColor // 保持边框与背景一致
 		} else if st.hover {
-			fillColor = gTheme.btnFillHover
+			// 悬停时背景稍微变化
+			if gTheme.isLight {
+				fillColor = rgb(0xF1, 0xF4, 0xF8)
+			} else {
+				fillColor = rgb(0x3A, 0x45, 0x54)
+			}
+			borderColor = fillColor // 保持边框与背景一致
 		}
 	} else {
 		if !enabled {
@@ -1102,7 +1118,24 @@ func drawButton(hwnd uintptr, hdc uintptr, st *btnState) {
 
 	var textPtr *uint16
 	if st.isClose {
-		textPtr = toUTF16Ptr("×")
+		// 关闭按钮：使用 GDI 绘制精确的 X 符号
+		centerX := (rc.left + rc.right) / 2
+		centerY := (rc.top + rc.bottom) / 2
+		halfSize := int32(5)
+
+		closePen, _, _ := procCreatePen.Call(psSolid, 2, textColor)
+		oldClosePen, _, _ := procSelectObject.Call(hdc, closePen)
+
+		// 绘制第一条线：左上到右下
+		procMoveToEx.Call(hdc, uintptr(centerX-halfSize), uintptr(centerY-halfSize), 0)
+		procLineTo.Call(hdc, uintptr(centerX+halfSize), uintptr(centerY+halfSize))
+
+		// 绘制第二条线：右上到左下
+		procMoveToEx.Call(hdc, uintptr(centerX+halfSize), uintptr(centerY-halfSize), 0)
+		procLineTo.Call(hdc, uintptr(centerX-halfSize), uintptr(centerY+halfSize))
+
+		procSelectObject.Call(hdc, oldClosePen)
+		procDeleteObject.Call(closePen)
 	} else {
 		buf := make([]uint16, 256)
 		n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
@@ -1111,9 +1144,9 @@ func drawButton(hwnd uintptr, hdc uintptr, st *btnState) {
 		} else {
 			textPtr = &buf[0]
 		}
+		drawRc := rc
+		procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(textPtr)), ^uintptr(0), uintptr(unsafe.Pointer(&drawRc)), dtCenter|dtVCenter|dtSingleLine)
 	}
-	drawRc := rc
-	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(textPtr)), ^uintptr(0), uintptr(unsafe.Pointer(&drawRc)), dtCenter|dtVCenter|dtSingleLine)
 }
 
 func themedBtnWndProc(hwnd uintptr, msgID uint32, wParam, lParam uintptr) uintptr {
@@ -1149,12 +1182,18 @@ func themedBtnWndProc(hwnd uintptr, msgID uint32, wParam, lParam uintptr) uintpt
 	case wmLButtonDown:
 		st.down = true
 		invalidateWindow(hwnd)
+		return 0 // 阻止默认绘制
 
 	case wmLButtonUp:
 		if st.down {
 			st.down = false
 			invalidateWindow(hwnd)
+			// 发送 BN_CLICKED 通知给父窗口
+			parentHwnd, _, _ := procGetParent.Call(hwnd)
+			wParam := uintptr(bnClicked)<<16 | uintptr(idClose)
+			procPostMessageW.Call(parentHwnd, wmCommand, wParam, hwnd)
 		}
+		return 0 // 阻止默认绘制
 
 	case wmPaint:
 		var ps paintStruct
@@ -1310,12 +1349,18 @@ func closeBtnWndProc(hwnd uintptr, msgID uint32, wParam, lParam uintptr) uintptr
 	case wmLButtonDown:
 		gCloseBtnDown = true
 		invalidateWindow(hwnd)
+		return 0 // 阻止默认绘制
 
 	case wmLButtonUp:
 		if gCloseBtnDown {
 			gCloseBtnDown = false
 			invalidateWindow(hwnd)
+			// 发送 BN_CLICKED 通知给父窗口
+			parentHwnd, _, _ := procGetParent.Call(hwnd)
+			wParam := uintptr(bnClicked)<<16 | uintptr(idClose)
+			procPostMessageW.Call(parentHwnd, wmCommand, wParam, hwnd)
 		}
+		return 0 // 阻止默认绘制
 
 	case wmPaint:
 		var ps paintStruct

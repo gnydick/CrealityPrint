@@ -163,8 +163,21 @@ echo currentdate=%currentdate%
 echo JOB_NAME=%JOB_NAME%
 set zipName=CrealityPrint_%TAG_NAME%_%currentdate%.zip
 set EXE_NAME=%APPNAME%_%TAG_NAME%_%VERSION_EXTRA%.exe
+set CrealityPrint_EXE=%C3D_BUILD_DIR%\src\%build_type%\%APPNAME%.exe
+echo CrealityPrint_EXE=%CrealityPrint_EXE%
 if [%INSTALL_TYPE%]==[nsis] (
     echo package....
+    @REM Sign CrealityPrint.exe before packaging NSIS installer
+    if exist "%CrealityPrint_EXE%" (
+        echo Signing CrealityPrint.exe: %CrealityPrint_EXE%
+        "C:\curl.exe" -X POST -F file=@%CrealityPrint_EXE% http://172.20.180.14:3001/sign
+        "C:\curl.exe" -L http://172.20.180.14:3001/exe/%APPNAME%.exe -o %ROOT_C3D%\CrealityPrint_signed.exe
+        copy /Y %ROOT_C3D%\CrealityPrint_signed.exe %CrealityPrint_EXE%
+        del /Q %ROOT_C3D%\CrealityPrint_signed.exe
+        echo CrealityPrint.exe signed successfully.
+    ) else (
+        echo WARN: CrealityPrint.exe not found at %CrealityPrint_EXE%
+    )
     cmake --build . --target package --config %build_type%
     if [%LOCAL_BUILD%]==[OFF] (
         echo EXE_NAME=%EXE_NAME%

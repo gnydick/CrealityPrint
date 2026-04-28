@@ -51,6 +51,7 @@
 #include <boost/nowide/iostream.hpp>
 #include <boost/nowide/cstdio.hpp>
 #include <boost/nowide/cstdlib.hpp>
+#include <boost/nowide/fstream.hpp>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
@@ -116,6 +117,133 @@ Vec2d travel_point_1;
 Vec2d travel_point_2;
 Vec2d travel_point_3;
 
+static std::vector<unsigned int> collect_rendered_extruder_ids(const GCodeProcessorResult &result)
+{
+    std::vector<unsigned int> extruder_ids;
+    extruder_ids.reserve(result.moves.size());
+    for (const auto &move : result.moves) {
+        if (move.type == EMoveType::Extrude || move.type == EMoveType::Extrude_Alter)
+            extruder_ids.push_back(move.extruder_id);
+    }
+
+    sort_remove_duplicates(extruder_ids);
+    return extruder_ids;
+}
+
+static std::vector<std::string> build_render_aligned_default_string_values(
+    const ConfigBase &cfg, const std::vector<unsigned int> &rendered_extruders, const std::string &source_key)
+{
+    const auto *values_opt = cfg.option<ConfigOptionStrings>(source_key);
+    if (values_opt == nullptr)
+        return {};
+
+    std::vector<std::string> aligned_values(values_opt->values.size());
+    for (const unsigned int extruder_id : rendered_extruders) {
+        if (extruder_id < values_opt->values.size())
+            aligned_values[extruder_id] = values_opt->values[extruder_id];
+    }
+    return aligned_values;
+}
+
+static std::string serialize_string_values(const std::string &key, const std::vector<std::string> &values)
+{
+    DynamicPrintConfig temp_config;
+    temp_config.set_key_value(key, new ConfigOptionStrings(values));
+    return temp_config.opt_serialize(key);
+}
+
+static bool rewrite_config_block_tail_values(
+    const std::string &path, const std::vector<std::pair<std::string, std::string>> &replacements)
+{
+    if (replacements.empty())
+        return true;
+
+    boost::nowide::ifstream input(path, std::ios::binary);
+    if (!input.is_open())
+        return false;
+
+    std::streamoff config_block_offset = -1;
+    std::streamoff line_start_offset   = 0;
+    std::string    line;
+    while (std::getline(input, line)) {
+        std::string trimmed = line;
+        if (!trimmed.empty() && trimmed.back() == '\r')
+            trimmed.pop_back();
+        if (trimmed == "; CONFIG_BLOCK_START")
+            config_block_offset = line_start_offset;
+
+        const std::streamoff next_offset = input.tellg();
+        line_start_offset = (next_offset >= 0) ? next_offset : line_start_offset;
+    }
+
+    if (config_block_offset < 0)
+        return false;
+
+    input.clear();
+    input.seekg(config_block_offset, std::ios::beg);
+    std::string tail_text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    input.close();
+
+    std::istringstream tail_stream(tail_text);
+    std::string rewritten_tail;
+    bool inside_config_block = false;
+    while (std::getline(tail_stream, line)) {
+        std::string trimmed = line;
+        if (!trimmed.empty() && trimmed.back() == '\r')
+            trimmed.pop_back();
+
+        if (trimmed == "; CONFIG_BLOCK_START")
+            inside_config_block = true;
+
+        if (inside_config_block) {
+            for (const auto &replacement : replacements) {
+                const std::string prefix = "; " + replacement.first + " = ";
+                if (boost::starts_with(trimmed, prefix)) {
+                    line = prefix + replacement.second;
+                    break;
+                }
+            }
+        }
+
+        rewritten_tail += line;
+        rewritten_tail += '\n';
+
+        if (trimmed == "; CONFIG_BLOCK_END")
+            inside_config_block = false;
+    }
+
+    boost::filesystem::resize_file(path, static_cast<uintmax_t>(config_block_offset));
+
+    boost::nowide::ofstream output(path, std::ios::binary | std::ios::app);
+    if (!output.is_open())
+        return false;
+
+    output.write(rewritten_tail.data(), static_cast<std::streamsize>(rewritten_tail.size()));
+    output.flush();
+    return !output.fail();
+}
+
+static void sync_default_filament_metadata_with_rendered_tools(
+    const ConfigBase &cfg, const std::string &path, GCodeProcessorResult &result)
+{
+    const std::vector<unsigned int> rendered_extruders = collect_rendered_extruder_ids(result);
+    const std::vector<std::string> render_aligned_colours =
+        build_render_aligned_default_string_values(cfg, rendered_extruders, "filament_colour");
+    const std::vector<std::string> render_aligned_types =
+        build_render_aligned_default_string_values(cfg, rendered_extruders, "filament_type");
+
+    std::vector<std::pair<std::string, std::string>> replacements;
+    if (!render_aligned_colours.empty())
+        replacements.emplace_back("default_filament_colour", serialize_string_values("default_filament_colour", render_aligned_colours));
+    if (!render_aligned_types.empty())
+        replacements.emplace_back("default_filament_type", serialize_string_values("default_filament_type", render_aligned_types));
+
+    if (!rewrite_config_block_tail_values(path, replacements))
+        throw RuntimeError("Failed to rewrite CONFIG_BLOCK tail for default filament metadata.");
+
+    if (!render_aligned_colours.empty())
+        result.creality_extruder_colors = render_aligned_colours;
+}
 static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
 {
     // give safe value in case there is no start_end_points in config
@@ -651,8 +779,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
 
         std::istringstream gcode_str(wipe_path_before_change_tool);
         std::string        wall_tail_wipe, line;
-        while (gcode_str) {
-            std::getline(gcode_str, line);
+        while (std::getline(gcode_str, line)) {
             if (line.find(";wipe_finish_path") == 0) {
                 gcodegen.m_wipe.reset_path();
                 gcodegen.set_last_pos(
@@ -683,6 +810,8 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
             }
         }
 
+        if (!wall_tail_wipe.empty())
+            gcode += gcodegen.set_wipe_tower_print_acceleration();
         gcode += wall_tail_wipe;
 
         gcode += gcodegen.writer().unlift(); // Make sure there is no z-hop (in most cases, there isn't).
@@ -787,8 +916,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
             //has change filement over.
             std::istringstream gcode_str(tcr_rotated_gcode);
             std::string        wall_tail_wipe, line;
-            while (gcode_str) {
-                std::getline(gcode_str, line);
+            while (std::getline(gcode_str, line)) {
                 if (line.find(";wipe_finish_path") == 0) {
                     gcodegen.m_wipe.reset_path();
                     gcodegen.set_last_pos(
@@ -820,6 +948,9 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
 
         std::string around_wipe_tower_str;
         // move to start_pos for wiping after toolchange
+        {
+        const bool auto_travel_acceleration_was_suppressed = gcodegen.writer().auto_travel_acceleration_suppressed();
+        gcodegen.writer().set_auto_travel_acceleration_suppressed(true);
         if (!gcodegen.m_config.prime_tower_skip_points.value) {
         /*    std::string start_pos_str = gcodegen.travel_to(wipe_tower_point_to_object_point(gcodegen,
                                                                                             tool_change_start_pos + plate_origin_2d),
@@ -872,6 +1003,8 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
             }
             around_wipe_tower_str += travel_to_wipe_tower_gcode;
             gcodegen.set_last_pos(start_wipe_pos);
+        }
+        gcodegen.writer().set_auto_travel_acceleration_suppressed(auto_travel_acceleration_was_suppressed);
         }
 
         // add for CFS
@@ -976,7 +1109,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         std::string tcr_gcode,
             tcr_escaped_gcode = gcodegen.placeholder_parser_process("tcr_rotated_gcode", tcr_rotated_gcode, new_extruder_id, &config);
         unescape_string_cstyle(tcr_escaped_gcode, tcr_gcode);
-        gcode += tcr_gcode;
+        gcode += gcodegen.inject_wipe_tower_print_acceleration(tcr_gcode);
         check_add_eol(toolchange_gcode_str);
 
         // SoftFever: set new PA for new filament
@@ -985,6 +1118,8 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         }
   
         //抬升
+        const bool auto_travel_acceleration_was_suppressed = gcodegen.writer().auto_travel_acceleration_suppressed();
+        gcodegen.writer().set_auto_travel_acceleration_suppressed(true);
         if (!gcodegen.config().wipe_tower_no_sparse_layers && !is_approx(z, current_z))
             /*gcode += */ gcodegen.writer().travel_to_z(current_z + gcodegen.config().z_hop.get_at(new_extruder_id) /*0.4*/,
                                                         "Travel back up to the topmost object layer.");
@@ -999,6 +1134,8 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         //下降
         if (!gcodegen.config().wipe_tower_no_sparse_layers && !is_approx(z, current_z))
         /*gcode += */gcodegen.writer().travel_to_z(current_z, "Travel back up to the topmost object layer.");
+
+        gcodegen.writer().set_auto_travel_acceleration_suppressed(auto_travel_acceleration_was_suppressed);
 
         // current_z = gcodegen.writer().get_position().z();
         if (!gcodegen.config().wipe_tower_no_sparse_layers && !is_approx(z, current_z)) {
@@ -1288,7 +1425,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         std::string tcr_gcode,
             tcr_escaped_gcode = gcodegen.placeholder_parser_process("tcr_rotated_gcode", tcr_rotated_gcode, new_extruder_id, &config);
         unescape_string_cstyle(tcr_escaped_gcode, tcr_gcode);
-        gcode += tcr_gcode;
+        gcode += gcodegen.inject_wipe_tower_print_acceleration(tcr_gcode);
         check_add_eol(toolchange_gcode_str);
 
         // SoftFever: set new PA for new filament
@@ -1297,7 +1434,12 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         }
 
         // A phony move to the end position at the wipe tower.
-        gcodegen.writer().travel_to_xy((end_pos + plate_origin_2d).cast<double>());
+        {
+            const bool auto_travel_acceleration_was_suppressed = gcodegen.writer().auto_travel_acceleration_suppressed();
+            gcodegen.writer().set_auto_travel_acceleration_suppressed(true);
+            gcodegen.writer().travel_to_xy((end_pos + plate_origin_2d).cast<double>());
+            gcodegen.writer().set_auto_travel_acceleration_suppressed(auto_travel_acceleration_was_suppressed);
+        }
         gcodegen.set_last_pos(wipe_tower_point_to_object_point(gcodegen, end_pos + plate_origin_2d));
 
         // current_z = gcodegen.writer().get_position().z();
@@ -1560,7 +1702,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         std::string tcr_gcode,
             tcr_escaped_gcode = gcodegen.placeholder_parser_process("tcr_rotated_gcode", tcr_rotated_gcode, new_extruder_id, &config);
         unescape_string_cstyle(tcr_escaped_gcode, tcr_gcode);
-        gcode += tcr_gcode;
+        gcode += gcodegen.inject_wipe_tower_print_acceleration(tcr_gcode);
         check_add_eol(toolchange_gcode_str);
 
         // SoftFever: set new PA for new filament
@@ -1569,7 +1711,12 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         }
 
         // A phony move to the end position at the wipe tower.
-        gcodegen.writer().travel_to_xy((end_pos + plate_origin_2d).cast<double>());
+        {
+            const bool auto_travel_acceleration_was_suppressed = gcodegen.writer().auto_travel_acceleration_suppressed();
+            gcodegen.writer().set_auto_travel_acceleration_suppressed(true);
+            gcodegen.writer().travel_to_xy((end_pos + plate_origin_2d).cast<double>());
+            gcodegen.writer().set_auto_travel_acceleration_suppressed(auto_travel_acceleration_was_suppressed);
+        }
         gcodegen.set_last_pos(wipe_tower_point_to_object_point(gcodegen, end_pos + plate_origin_2d));
         if (!is_approx(z, current_z)) {
             gcode += gcodegen.writer().retract();
@@ -1776,7 +1923,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         std::string tcr_gcode,
             tcr_escaped_gcode = gcodegen.placeholder_parser_process("tcr_rotated_gcode", tcr_rotated_gcode, new_extruder_id, &config);
         unescape_string_cstyle(tcr_escaped_gcode, tcr_gcode);
-        gcode += tcr_gcode;
+        gcode += gcodegen.inject_wipe_tower_print_acceleration(tcr_gcode);
         check_add_eol(toolchange_gcode_str);
 
         // SoftFever: set new PA for new filament
@@ -1785,7 +1932,12 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         }
 
         // A phony move to the end position at the wipe tower.
-        gcodegen.writer().travel_to_xy((end_pos + plate_origin_2d).cast<double>());
+        {
+            const bool auto_travel_acceleration_was_suppressed = gcodegen.writer().auto_travel_acceleration_suppressed();
+            gcodegen.writer().set_auto_travel_acceleration_suppressed(true);
+            gcodegen.writer().travel_to_xy((end_pos + plate_origin_2d).cast<double>());
+            gcodegen.writer().set_auto_travel_acceleration_suppressed(auto_travel_acceleration_was_suppressed);
+        }
         gcodegen.set_last_pos(wipe_tower_point_to_object_point(gcodegen, end_pos + plate_origin_2d));
         if (!is_approx(z, current_z)) {
             gcode += gcodegen.writer().retract();
@@ -1982,8 +2134,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         Vec2f              old_pos(-1000.1f, -1000.1f);
 
         Vec2f last_arc_end_pos = pos;
-        while (gcode_str) {
-            std::getline(gcode_str, line); // we read the gcode line by line
+        while (std::getline(gcode_str, line)) { // we read the gcode line by line
 
             if (line.find(";avoiding_repeat_unretract") == 0)
             {
@@ -2125,8 +2276,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         Vec2f              transformed_pos = pos;
         Vec2f              old_pos(-1000.1f, -1000.1f);
         const std::string  prefix = "custom_set_tmp";
-        while (gcode_str) {
-            std::getline(gcode_str, line); // we read the gcode line by line
+        while (std::getline(gcode_str, line)) { // we read the gcode line by line
             if (line.find("relative_zhop_up_for_firmware ") == 0) {
                 line = tranGCode(line, "relative_zhop_up_for_firmware ", z);
             } else if (line.find("relative_zhop_recovery_for_firmware ") == 0) {
@@ -2217,8 +2367,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         Vec2f transformed_pos = pos;
         Vec2f old_pos(-1000.1f, -1000.1f);
         const std::string  prefix = "custom_set_tmp";
-        while (gcode_str) {
-            std::getline(gcode_str, line);  // we read the gcode line by line
+        while (std::getline(gcode_str, line)) {  // we read the gcode line by line
             if (line.find("relative_zhop_up_for_firmware ")== 0)
             {
                 line = tranGCode(line ,"relative_zhop_up_for_firmware ", z);
@@ -3031,6 +3180,12 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
     }
 
     m_processor.finalize(true, print->m_print_statistics.total_used_filament, print->config().creality_flush_time,print->config().multicolor_method);
+    try {
+        sync_default_filament_metadata_with_rendered_tools(print->full_print_config(), path_tmp, m_processor.result());
+    } catch (...) {
+        boost::nowide::remove(path_tmp.c_str());
+        throw;
+    }
     //file.write_md5(path_tmp);
     //    DoExport::update_print_estimated_times_stats(m_processor, print->m_print_statistics);
     DoExport::update_print_estimated_stats(m_processor, m_writer.extruders(), print->m_print_statistics, print->config());
@@ -4147,6 +4302,20 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             this->m_objSupportsWithBrim.insert(iter->first);
     }
     if (this->m_objsWithBrim.empty() && this->m_objSupportsWithBrim.empty()) m_brim_done = true;
+
+    if (m_config.travel_acceleration.value > 0) {
+        m_writer.set_travel_acceleration((unsigned int) floor(m_config.travel_acceleration.value + 0.5));
+    }
+    std::vector<unsigned int> first_layer_travel_accelerations;
+    for (size_t i = 0; i < m_config.initial_layer_travel_acceleration.values.size(); i++) {
+        if (!m_config.initial_layer_travel_acceleration.is_nil(i)) {
+            double value = m_config.initial_layer_travel_acceleration.values[i];
+            first_layer_travel_accelerations.emplace_back((unsigned int) floor(value + 0.5));
+        } else {
+            first_layer_travel_accelerations.emplace_back(0); // nil 值填 0
+        }
+    }
+    m_writer.set_first_layer_travel_acceleration(first_layer_travel_accelerations);
 
     if(!is_bbl_printers)
     {
@@ -6025,6 +6194,8 @@ LayerResult GCode::process_layer(
     //BBS: set layer time fan speed after layer change gcode
     gcode += ";_SET_FAN_SPEED_CHANGING_LAYER\n";
 
+    m_writer.set_first_layer(this->on_first_layer());
+
     if (print.calib_mode() == CalibMode::Calib_PA_Tower) {
         gcode += writer().set_pressure_advance(print.calib_params().start + static_cast<int>(print_z) * print.calib_params().step);
     } else if (print.calib_mode() == CalibMode::Calib_Temp_Tower) {
@@ -6532,6 +6703,19 @@ LayerResult GCode::process_layer(
                                               instance_to_print.print_object.slicing_parameters().raft_layers() ==
                                                   layer_to_print.object_layer->id();
                 m_config.apply(instance_to_print.print_object.config(), true);
+                // Update first layer travel accelerations whenever object config changes
+                {
+                    std::vector<unsigned int> fta;
+                    for (size_t i = 0; i < m_config.initial_layer_travel_acceleration.values.size(); i++) {
+                        if (!m_config.initial_layer_travel_acceleration.is_nil(i) &&
+                            m_config.initial_layer_travel_acceleration.values[i] > 0) {
+                            fta.emplace_back((unsigned int) floor(m_config.initial_layer_travel_acceleration.values[i] + 0.5));
+                        } else {
+                            fta.emplace_back(0);
+                        }
+                    }
+                    m_writer.set_first_layer_travel_acceleration(fta);
+                }
                 m_layer                  = layer_to_print.layer();
                 m_object_layer_over_raft = object_layer_over_raft;
                 if (m_config.reduce_crossing_wall)
@@ -6941,7 +7125,10 @@ std::string GCode::preamble()
         position of our writer object so that any initial lift taking place
         before the first layer change will raise the extruder from the correct
         initial Z instead of 0.  */
+    const bool auto_travel_acceleration_was_suppressed = m_writer.auto_travel_acceleration_suppressed();
+    m_writer.set_auto_travel_acceleration_suppressed(true);
     m_writer.travel_to_z(m_config.z_offset.value);
+    m_writer.set_auto_travel_acceleration_suppressed(auto_travel_acceleration_was_suppressed);
 
     return gcode;
 }
@@ -8561,6 +8748,40 @@ std::string GCode::_encode_label_ids_to_base64(std::vector<size_t> ids)
     return encodeBase64(bitset);
 }
 
+std::string GCode::set_wipe_tower_print_acceleration()
+{
+    if (m_config.default_acceleration.value <= 0)
+        return std::string();
+
+    double acceleration = m_config.default_acceleration.value;
+    if (this->on_first_layer() && m_config.initial_layer_acceleration.value > 0) {
+        acceleration = m_config.initial_layer_acceleration.value;
+    } else if (m_config.top_surface_acceleration.value > 0 && is_top_surface(m_last_notgapfill_extrusion_role)) {
+        acceleration = m_config.top_surface_acceleration.value;
+    }
+
+    if (m_config.acceleration_limit_mess_enable || m_config.speed_limit_to_height_enable) {
+        double weight = DoExport::update_total_weight(m_writer.extruders());
+        m_smoothSpeedAcc->detect_acc(acceleration, weight, m_last_layer_z);
+    }
+
+    return m_writer.set_print_acceleration((unsigned int) floor(acceleration + 0.5));
+}
+
+std::string GCode::inject_wipe_tower_print_acceleration(std::string tower_gcode)
+{
+    std::string acceleration_gcode = this->set_wipe_tower_print_acceleration();
+    if (acceleration_gcode.empty())
+        return tower_gcode;
+
+    const std::string marker     = "; CP TOOLCHANGE WIPE";
+    size_t            marker_pos = tower_gcode.find(marker);
+    if (marker_pos != std::string::npos)
+        tower_gcode.insert(marker_pos, acceleration_gcode);
+
+    return tower_gcode;
+}
+
 // This method accepts &point in print coordinates.
 std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string comment, double z/* = DBL_MAX*/)
 {
@@ -8582,8 +8803,23 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
     double jerk_to_set = 0.0;
     unsigned int acceleration_to_set = 0;
     if (this->on_first_layer()) {
-        if (m_config.default_acceleration.value > 0 && m_config.initial_layer_acceleration.value > 0) {
-            acceleration_to_set = (unsigned int) floor(m_config.initial_layer_acceleration.value + 0.5);
+        unsigned int initial_layer_travel_acceleration = 0;
+        if (!m_config.initial_layer_travel_acceleration.values.empty()) {
+            const size_t extruder_id = m_writer.extruder() ? m_writer.extruder()->id() : 0;
+            const size_t acceleration_idx = std::min(extruder_id, m_config.initial_layer_travel_acceleration.values.size() - 1);
+            if (!m_config.initial_layer_travel_acceleration.is_nil(acceleration_idx) &&
+                m_config.initial_layer_travel_acceleration.values[acceleration_idx] > 0) {
+                initial_layer_travel_acceleration =
+                    (unsigned int) floor(m_config.initial_layer_travel_acceleration.values[acceleration_idx] + 0.5);
+            }
+        }
+
+        if (m_config.default_acceleration.value > 0) {
+            if (initial_layer_travel_acceleration > 0) {
+                acceleration_to_set = initial_layer_travel_acceleration;
+            } else if (m_config.initial_layer_acceleration.value > 0) {
+                acceleration_to_set = (unsigned int) floor(m_config.initial_layer_acceleration.value + 0.5);
+            }
         }
         if (m_config.default_jerk.value > 0 && m_config.initial_layer_jerk.value > 0) {
             jerk_to_set = m_config.initial_layer_jerk.value;
@@ -8670,11 +8906,15 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
         use_short_distance_acceleration) // Prusa used VFA, -travel short distance acceleration
         acceleration_to_set = travel_short_distance_acceleration;
 
-    if (m_writer.get_gcode_flavor() == gcfKlipper) {
-        gcode += m_writer.set_accel_and_jerk(acceleration_to_set, jerk_to_set);
-    } else {
-        gcode += m_writer.set_travel_acceleration(acceleration_to_set);
-        gcode += m_writer.set_jerk_xy(jerk_to_set);
+    const bool auto_travel_acceleration_was_suppressed = m_writer.auto_travel_acceleration_suppressed();
+    m_writer.set_auto_travel_acceleration_override(acceleration_to_set);
+    if (!auto_travel_acceleration_was_suppressed) {
+        if (m_writer.get_gcode_flavor() == gcfKlipper) {
+            m_writer.set_auto_travel_acceleration_suppressed(true);
+            gcode += m_writer.set_accel_and_jerk(acceleration_to_set, jerk_to_set);
+        } else {
+            gcode += m_writer.set_jerk_xy(jerk_to_set);
+        }
     }
 
     // use G1 because we rely on paths being straight (G0 may make round paths)
@@ -8730,6 +8970,9 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
     //    }
     //}
 
+
+    m_writer.set_auto_travel_acceleration_suppressed(auto_travel_acceleration_was_suppressed);
+    m_writer.clear_auto_travel_acceleration_override();
 
     return gcode;
 }
