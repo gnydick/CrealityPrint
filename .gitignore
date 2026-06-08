@@ -23,7 +23,6 @@ install_*
 build_*/
 SVG
 src/OrcaSlicer-doc/
-.idea/
 /.cache/
 *.mo
 **/process_full/
@@ -65,3 +64,7 @@ __pycache__
 docs
 flatbuild
 /.edge-zentao-profile
+
+# Keep skill assets — the broad install_* / build_* patterns above would otherwise
+# ignore the build-crealityprint skill's install_*.ps1 scripts.
+!.claude/skills/**

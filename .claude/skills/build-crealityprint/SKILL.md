@@ -151,9 +151,9 @@ AND the bogus update prompt in one shot. The default is `Alpha`.
 CLion's bundled CMake is 4.2.2 (broken, Gotcha 1). One-time setup:
 1. Settings → Build, Execution, Deployment → **Toolchains** → Visual Studio, architecture
    `amd64`, and set **CMake** to `D:\cpbuild\tools\cmake-3.31.12-windows-x86_64\bin\cmake.exe`.
-2. A ready CLion CMake profile is in `scripts/clion-cmake.xml` — copy it to `.idea/cmake.xml`
-   (`.idea/` is gitignored, so it can't be committed there). The committed
-   `.run/CrealityPrint.run.xml` sets `SLIC3R_RESOURCES_DIR` so Run works out of the box.
+2. The CLion CMake profile is committed at `.idea/cmake.xml` (Release profile with the cache
+   vars above), and `.run/CrealityPrint.run.xml` sets `SLIC3R_RESOURCES_DIR` so Run works
+   out of the box.
 
 Note: plain **IntelliJ IDEA cannot build C++/CMake** — use **CLion**.
 
