@@ -10,7 +10,6 @@
 #include "Model.hpp"
 #include "ModelVolume.hpp"
 #include "ModelInstance.hpp"
-#include "libslic3r/FilamentTypeRegistry.hpp"
 #include <algorithm>
 #include <numeric>
 #include <unordered_set>
@@ -592,17 +591,8 @@ double getadhesionCoeff(const PrintObject* printObject)
     for (const ModelVolume* modelVolume : objectVolumes) {
         for (auto iter = extrudersFirstLayer.begin(); iter != extrudersFirstLayer.end(); iter++)
             if (modelVolume->extruder_id() == *iter) {
-                if (Model::extruderParamsMap.find(modelVolume->extruder_id()) != Model::extruderParamsMap.end()) {
-                    // Resolve custom types to their base so e.g. "PETG-Pro" inherits PETG's adhesion.
-                    const std::string matName = FilamentTypeRegistry::instance().effective_type(
-                        Model::extruderParamsMap.at(modelVolume->extruder_id()).materialName);
-                    if (matName == "PETG" || matName == "PCTG") {
-                        adhesionCoeff = 2;
-                    }
-                    else if (matName == "TPU") {
-                        adhesionCoeff = 0.5;
-                    }
-                }
+                if (Model::extruderParamsMap.find(modelVolume->extruder_id()) != Model::extruderParamsMap.end())
+                    adhesionCoeff = Model::extruderParamsMap.at(modelVolume->extruder_id()).brimAdhesionCoeff;
             }
     }
 

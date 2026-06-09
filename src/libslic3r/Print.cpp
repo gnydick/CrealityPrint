@@ -1102,10 +1102,14 @@ StringObjectException Print::check_multi_filament_valid(const Print& print)
     std::vector<std::string> filament_types;
     filament_types.reserve(extruders.size());
 
-    for (const auto& extruder_idx : extruders)
+    std::vector<int> filament_temp_types;
+    filament_temp_types.reserve(extruders.size());
+    for (const auto& extruder_idx : extruders) {
         filament_types.push_back(print_config.filament_type.get_at(extruder_idx));
+        filament_temp_types.push_back(print_config.filament_temp_type.get_at(extruder_idx));
+    }
 
-    if (!creality::Filament::check_multi_filaments_compatibility(filament_types))
+    if (!creality::Filament::is_filaments_compatible(filament_temp_types))
         return { L("Can not print multiple filaments which have large difference of temperature together. Otherwise, the extruder and nozzle may be blocked or damaged during printing") };
 
     return {std::string()};

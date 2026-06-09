@@ -1,6 +1,5 @@
 #include "../GCode.hpp"
 #include "CoolingBuffer.hpp"
-#include "libslic3r/FilamentTypeRegistry.hpp"
 #include "libslic3r/Geometry/ArcWelder.hpp"
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/replace.hpp>
@@ -440,14 +439,8 @@ std::vector<PerExtruderAdjustments> GCodeEditor::parse_layer_gcode(
         adj.cooling_slowdown_non_slow_outer_wall = adj.cooling_slowdown_logic == CoolingSlowdownLogicType::NonSlowOuterWalls;
         adj.cooling_slowdown_smart_zone          = adj.cooling_slowdown_logic == CoolingSlowdownLogicType::SmartCoolingZones;
       
-        const std::string filament_type = m_config.filament_type.get_at(extruder_id);
-        if (adj.cooling_slowdown_logic == CoolingSlowdownLogicType::SmartCoolingZones) {
-            // Resolve custom types to their base so e.g. "PLA-Galaxy" inherits PLA's smart cooling.
-            const std::string eff = FilamentTypeRegistry::instance().effective_type(filament_type);
-            if (eff == "PLA" || eff == "PETG" || eff == "ABS") {
-                adj.cooling_slowdown_smart_zone = true;
-            }
-        }
+        if (adj.cooling_slowdown_logic == CoolingSlowdownLogicType::SmartCoolingZones)
+            adj.cooling_slowdown_smart_zone = m_config.filament_cooling_smart_zone.get_at(extruder_id);
         map_extruder_to_per_extruder_adjustment[extruder_id] = i;
     }
 

@@ -1,6 +1,5 @@
 #include "Model.hpp"
 #include "BuildVolume.hpp"
-#include "libslic3r/FilamentTypeRegistry.hpp"
 #include "Format/AMF.hpp"
 #include "Format/svg.hpp"
 #include "GCodeWriter.hpp"
@@ -1220,8 +1219,12 @@ void Model::setExtruderParams(const DynamicPrintConfig& config, int extruders_co
             bedTemp = config.opt_int(get_bed_temp_key(curr_bed_type), i);
         }
 #endif
-        if (i == 0) extruderParamsMap.insert({ i,{matName, bedTemp, endTemp} });
-        extruderParamsMap.insert({ i + 1,{matName, bedTemp, endTemp} });
+        double thermalLength     = config.has("filament_thermal_length")      ? config.opt_float("filament_thermal_length", i)      : 200.0;
+        double brimAdhCoeff      = config.has("filament_brim_adhesion_coeff") ? config.opt_float("filament_brim_adhesion_coeff", i) : 1.0;
+        double bedAdhStrength    = config.has("filament_bed_adhesion_strength") ? config.opt_float("filament_bed_adhesion_strength", i) : 0.02;
+        ExtruderParams ep{matName, bedTemp, endTemp, thermalLength, brimAdhCoeff, bedAdhStrength};
+        if (i == 0) extruderParamsMap.insert({ i, ep });
+        extruderParamsMap.insert({ i + 1, ep });
     }
 }
 
@@ -1420,27 +1423,10 @@ double Model::findMaxSpeed(const ModelObject* object) {
 
 // BBS: thermal length is calculated according to the material of a volume
 double Model::getThermalLength(const ModelVolume* modelVolumePtr) {
-    double thermalLength = 200.;
     auto aa = modelVolumePtr->extruder_id();
-    if (Model::extruderParamsMap.find(aa) != Model::extruderParamsMap.end()) {
-        // Resolve through the registry so a custom type inherits its base's thermal length
-        // (e.g. "ABS-MyBrand" -> ABS). effective_type keeps recognized built-ins as themselves
-        // (incl. derived ones like PA-CF, which differs from PA here), so the existing
-        // per-type values are preserved exactly.
-        const std::string matName = FilamentTypeRegistry::instance().effective_type(
-            Model::extruderParamsMap.at(aa).materialName);
-        if (matName == "ABS" || matName == "PA-CF" || matName == "PET-CF") {
-            thermalLength = 100;
-        }
-        if (matName == "PC") {
-            thermalLength = 40;
-        }
-        if (matName == "TPU") {
-            thermalLength = 1000;
-        }
-
-    }
-    return thermalLength;
+    if (Model::extruderParamsMap.find(aa) != Model::extruderParamsMap.end())
+        return Model::extruderParamsMap.at(aa).thermalLength;
+    return 200.;
 }
 
 // BBS: thermal length calculation for a group of volumes

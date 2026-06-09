@@ -1,5 +1,4 @@
 #include "Filament.hpp"
-#include "libslic3r/FilamentTypeRegistry.hpp"
 
 #include "libslic3r/Utils.hpp"
 #include <boost/filesystem/path.hpp>
@@ -16,10 +15,24 @@ namespace creality
 {
     Slic3r::FilamentTempType Filament::get_filament_temp_type(const std::string& filament_type)
     {
-        // Delegated to the central registry, which normalizes the name (trim + case) and
-        // resolves unknown/custom types through their base type instead of returning
-        // Undefine. See Slic3r::FilamentTypeRegistry.
-        return Slic3r::FilamentTypeRegistry::instance().temp_type(filament_type);
+        // Legacy string-based lookup used for display/info purposes only.
+        // Slicing-critical code reads filament_temp_type config field directly.
+        static const std::unordered_map<std::string, Slic3r::FilamentTempType> s_map = {
+            {"ABS",Slic3r::HighTemp},{"ASA",Slic3r::HighTemp},{"PC",Slic3r::HighTemp},
+            {"PA",Slic3r::HighTemp},{"PA-CF",Slic3r::HighTemp},{"PA-GF",Slic3r::HighTemp},
+            {"PA6-CF",Slic3r::HighTemp},{"PET-CF",Slic3r::HighTemp},{"PPS",Slic3r::HighTemp},
+            {"PPS-CF",Slic3r::HighTemp},{"PPA-CF",Slic3r::HighTemp},{"PPA-GF",Slic3r::HighTemp},
+            {"ABS-GF",Slic3r::HighTemp},{"ASA-Aero",Slic3r::HighTemp},
+            {"PLA",Slic3r::LowTemp},{"TPU",Slic3r::LowTemp},{"PLA-CF",Slic3r::LowTemp},
+            {"PLA-AERO",Slic3r::LowTemp},{"PVA",Slic3r::LowTemp},{"BVOH",Slic3r::LowTemp},
+            {"HIPS",Slic3r::HighLowCompatible},{"PETG",Slic3r::HighLowCompatible},
+            {"PE",Slic3r::HighLowCompatible},{"PP",Slic3r::HighLowCompatible},
+            {"EVA",Slic3r::HighLowCompatible},{"PE-CF",Slic3r::HighLowCompatible},
+            {"PP-CF",Slic3r::HighLowCompatible},{"PP-GF",Slic3r::HighLowCompatible},
+            {"PHA",Slic3r::HighLowCompatible},
+        };
+        auto it = s_map.find(filament_type);
+        return it != s_map.end() ? it->second : Slic3r::Undefine;
     }
 
     int Filament::get_hrc_by_nozzle_type(const Slic3r::NozzleType&type)

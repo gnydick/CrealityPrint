@@ -4,8 +4,6 @@ list(APPEND lisbslic3r_sources
         FDM/MachineVender.cpp
         FDM/Filament.hpp
         FDM/Filament.cpp
-        FilamentTypeRegistry.hpp
-        FilamentTypeRegistry.cpp
         FDM/WipeTowerCreality.hpp
         FDM/WipeTowerCreality.cpp
         FDM/WipeTowerCrealityCFS.hpp
