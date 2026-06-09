@@ -10,6 +10,7 @@
 #include <wx/generic/statbmpg.h>
 #include <boost/nowide/cstdio.hpp>
 #include "libslic3r/PresetBundle.hpp"
+#include "libslic3r/FilamentTypeRegistry.hpp"
 #include "I18N.hpp"
 #include "GUI_App.hpp"
 #include "MsgDialog.hpp"
@@ -925,7 +926,11 @@ wxBoxSizer *CreateFilamentPresetDialog::create_type_item()
     filament_type.Sort();
 
     wxBoxSizer *comboBoxSizer = new wxBoxSizer(wxVERTICAL);
-    m_filament_type_combobox  = new ComboBox(this, wxID_ANY, wxEmptyString, wxDefaultPosition, NAME_OPTION_COMBOBOX_SIZE, 0, nullptr, wxCB_READONLY);
+    // Editable (no wxCB_READONLY): the listed system types are suggestions, but the user may type
+    // an arbitrary custom type name. The typed value flows through GetLabel() to the saved
+    // filament_type; for a custom name the user picks its base explicitly in the base combobox
+    // below, which drives both the clone-source list and the persisted name->base mapping.
+    m_filament_type_combobox  = new ComboBox(this, wxID_ANY, wxEmptyString, wxDefaultPosition, NAME_OPTION_COMBOBOX_SIZE, 0, nullptr, 0);
     m_filament_type_combobox->SetLabel(_L("Select Type"));
     m_filament_type_combobox->SetLabelColor(DEFAULT_PROMPT_TEXT_COLOUR);
     m_filament_type_combobox->Set(filament_type);
@@ -948,6 +953,44 @@ wxBoxSizer *CreateFilamentPresetDialog::create_type_item()
         m_scrolled_preset_panel->SetSizerAndFit(m_scrolled_sizer);
 
         update_dialog_size();
+        e.Skip();
+    });
+
+    // The combobox is editable: when the user types a custom type and presses Enter, re-run the
+    // same refresh as a dropdown selection so the clone-source list updates for the typed type.
+    m_filament_type_combobox->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent &e) {
+        wxCommandEvent evt(wxEVT_COMBOBOX, m_filament_type_combobox->GetId());
+        evt.SetEventObject(m_filament_type_combobox);
+        m_filament_type_combobox->GetEventHandler()->ProcessEvent(evt);
+        e.Skip();
+    });
+
+    // Base-type picker: for a custom (non-built-in) type the user explicitly chooses which built-in
+    // base it inherits behavior and clones settings from. Built-in types ignore it (they are their
+    // own base). Inheritance is always explicit — never inferred from the typed name.
+    wxBoxSizer *  baseLabelSizer = new wxBoxSizer(wxVERTICAL);
+    wxStaticText *static_base_text = new wxStaticText(this, wxID_ANY, _L("Base type"), wxDefaultPosition, wxDefaultSize);
+    baseLabelSizer->Add(static_base_text, 0, wxEXPAND | wxALL, 0);
+    horizontal_sizer->Add(baseLabelSizer, 0, wxEXPAND | wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(10));
+
+    wxArrayString base_type_choices;
+    for (const std::string &b : Slic3r::FilamentTypeRegistry::instance().base_types())
+        base_type_choices.Add(from_u8(b));
+    wxBoxSizer *baseComboBoxSizer = new wxBoxSizer(wxVERTICAL);
+    m_filament_base_combobox = new ComboBox(this, wxID_ANY, wxEmptyString, wxDefaultPosition, NAME_OPTION_COMBOBOX_SIZE, 0, nullptr, wxCB_READONLY);
+    m_filament_base_combobox->Set(base_type_choices);
+    if (!base_type_choices.IsEmpty()) {
+        int pla_idx = base_type_choices.Index("PLA");
+        m_filament_base_combobox->SetSelection(pla_idx != wxNOT_FOUND ? pla_idx : 0);
+    }
+    baseComboBoxSizer->Add(m_filament_base_combobox, 0, wxEXPAND | wxALL, 0);
+    horizontal_sizer->Add(baseComboBoxSizer, 0, wxEXPAND | wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(5));
+
+    // Changing the base also refreshes the clone-source list (reuse the type handler above).
+    m_filament_base_combobox->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent &e) {
+        wxCommandEvent evt(wxEVT_COMBOBOX, m_filament_type_combobox->GetId());
+        evt.SetEventObject(m_filament_type_combobox);
+        m_filament_type_combobox->GetEventHandler()->ProcessEvent(evt);
         e.Skip();
     });
 
@@ -1194,8 +1237,16 @@ wxBoxSizer *CreateFilamentPresetDialog::create_button_item()
 
         std::string user_filament_id     = get_filament_id(filament_preset_name);
 
+        // Record a custom (non-built-in) type's explicitly-chosen base so it inherits behavior
+        // everywhere (temperature, cooling, adhesion, AMS, ...). Built-in types need no mapping.
+        {
+            auto &reg = Slic3r::FilamentTypeRegistry::instance();
+            if (!reg.is_builtin(type_name))
+                reg.add_custom_type(type_name, curr_filament_base());
+        }
+
         const wxString &curr_create_type = curr_create_filament_type();
-        
+
         if (curr_create_type == m_create_type.base_filament) {
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":clone filament  create type  filament ";
             for (const std::pair<::CheckBox *, std::pair<std::string, Preset *>> &checkbox_preset : m_filament_preset) {
@@ -1288,6 +1339,9 @@ wxArrayString CreateFilamentPresetDialog::get_filament_preset_choices()
     } else {
         type_name = into_u8(type_str);
     }
+    // Clone sources are matched by the resolved base: a built-in type matches itself; a custom
+    // type matches presets of its explicitly-chosen base (e.g. "Galaxy" base PLA -> PLA presets).
+    const std::string filament_base = curr_filament_base();
 
     for (std::pair<std::string, Preset*> filament_presets : m_all_presets_map) {
         Preset *preset = filament_presets.second;
@@ -1297,7 +1351,9 @@ wxArrayString CreateFilamentPresetDialog::get_filament_preset_choices()
             continue;
         }
         auto fila_type = preset->config.option<ConfigOptionStrings>("filament_type");
-        if (!fila_type || fila_type->values.empty() || type_name != fila_type->values[0]) continue;
+        if (!fila_type || fila_type->values.empty()) continue;
+        if (FilamentTypeRegistry::instance().effective_type(fila_type->values[0]) != filament_base)
+            continue;
         m_filament_choice_map[preset->filament_id].push_back(preset);
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " base user preset is:" << preset->name;
     }
@@ -1403,6 +1459,23 @@ wxString CreateFilamentPresetDialog::curr_create_filament_type()
     return curr_filament_type;
 }
 
+std::string CreateFilamentPresetDialog::curr_filament_base()
+{
+    auto &reg = Slic3r::FilamentTypeRegistry::instance();
+    const std::string type_name = into_u8(m_filament_type_combobox->GetLabel());
+    // A built-in type is its own base (and matches/clones from itself). A custom type uses the
+    // explicitly-chosen base from the base combobox. effective_type normalizes the result so it
+    // compares equal to effective_type(preset_type).
+    if (reg.is_builtin(type_name))
+        return reg.effective_type(type_name);
+    if (m_filament_base_combobox) {
+        const std::string base = into_u8(m_filament_base_combobox->GetLabel());
+        if (!base.empty())
+            return reg.normalize(base);
+    }
+    return reg.effective_type(type_name);
+}
+
 void CreateFilamentPresetDialog::get_filament_presets_by_machine()
 {
     wxArrayString choices;
@@ -1416,7 +1489,9 @@ void CreateFilamentPresetDialog::get_filament_presets_by_machine()
     } else {
         type_name = into_u8(type_str);
     }
-    
+    // Match by resolved base so a custom type copies presets of its chosen base (see curr_filament_base).
+    const std::string filament_base = curr_filament_base();
+
     std::unordered_map<std::string, float>                 nozzle_diameter = nozzle_diameter_map;
     std::unordered_map<std::string, std::vector<Preset *>> machine_name_to_presets;
     PresetBundle *                                         preset_bundle = wxGetApp().preset_bundle;
@@ -1447,7 +1522,7 @@ void CreateFilamentPresetDialog::get_filament_presets_by_machine()
 
             if (filament_types && filament_types->values.empty()) continue;
             const std::string filament_type = filament_types->values[0];
-            if (filament_type != type_name) {
+            if (FilamentTypeRegistry::instance().effective_type(filament_type) != filament_base) {
                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " preset type is not selected type and preset name is: " << preset->name;
                 continue;
             }
