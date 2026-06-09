@@ -1,22 +1,20 @@
 #include "FilamentTypeRegistry.hpp"
 
-#include "libslic3r/Utils.hpp" // resources_dir()
+#include "libslic3r/Utils.hpp" // resources_dir(), data_dir()
 
 #include <algorithm>
+#include <utility>
+#include <vector>
 
 #include <boost/algorithm/string/trim.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/filesystem/path.hpp>
+#include <boost/filesystem/operations.hpp>
 #include <boost/nowide/fstream.hpp>
 #include <boost/log/trivial.hpp>
 #include <nlohmann/json.hpp>
 
 namespace Slic3r {
-
-static inline bool is_type_separator(char c)
-{
-    return c == '-' || c == '_' || c == ' ' || c == '+' || c == '.';
-}
 
 FilamentTypeRegistry& FilamentTypeRegistry::instance()
 {
@@ -34,7 +32,7 @@ std::string FilamentTypeRegistry::normalize(const std::string& s)
 
 void FilamentTypeRegistry::ensure_loaded() const
 {
-    std::call_once(m_load_flag, [this] { load(); });
+    std::call_once(m_load_flag, [this] { load(); load_custom(); });
 }
 
 void FilamentTypeRegistry::load() const
@@ -50,15 +48,26 @@ void FilamentTypeRegistry::load() const
         return s;
     };
 
-    // Hardcoded fallback, mirroring the previous behavior, used if the json is missing or
-    // unparseable so classification never silently disappears.
+    // Hardcoded fallback, mirroring filament_info.json, used if the json is missing or
+    // unparseable so classification/inheritance never silently disappears. Built-in bases map
+    // to themselves and derived built-ins map to their base — the same explicit data as the json.
     auto set_defaults = [this] {
         m_high_temp = {"ABS", "ASA", "PC", "PA", "PA-CF", "PA-GF", "PA6-CF", "PET-CF",
                        "PPS", "PPS-CF", "PPA-GF", "PPA-CF", "ABS-GF", "ASA-AERO"};
         m_low_temp  = {"PLA", "TPU", "PLA-CF", "PLA-AERO", "PVA", "BVOH"};
-        m_high_low_compatible = {"HIPS", "PETG", "PCTG", "PE", "PP", "EVA", "PE-CF", "PP-CF", "PP-GF", "PHA"};
-        m_base_candidates = {"PLA", "ABS", "ASA", "PETG", "PCTG", "PET", "PA", "PC", "PE",
-                             "PP", "TPU", "HIPS", "PVA", "BVOH", "PPS", "PPA", "EVA", "PHA"};
+        m_high_low_compatible = {"HIPS", "PETG", "PE", "PP", "EVA", "PE-CF", "PP-CF", "PP-GF", "PHA"};
+
+        static const char* bases[] = {"PLA", "ABS", "ASA", "PETG", "PCTG", "PET", "PA", "PC",
+                                      "PE", "PP", "TPU", "HIPS", "PVA", "BVOH", "PPS", "PPA", "EVA", "PHA"};
+        for (const char* b : bases)
+            m_builtin_base[b] = b;
+        static const std::pair<const char*, const char*> derived[] = {
+            {"PLA-CF", "PLA"}, {"PLA-AERO", "PLA"}, {"ABS-GF", "ABS"}, {"ASA-AERO", "ASA"},
+            {"PA-CF", "PA"}, {"PA-GF", "PA"}, {"PA6", "PA"}, {"PA6-CF", "PA"}, {"PAHT", "PA"}, {"PAHT-CF", "PA"},
+            {"PET-CF", "PET"}, {"PETG-CF", "PETG"}, {"PE-CF", "PE"}, {"PP-CF", "PP"}, {"PP-GF", "PP"},
+            {"PC-CF", "PC"}, {"PPS-CF", "PPS"}, {"PPA-CF", "PPA"}, {"PPA-GF", "PPA"}};
+        for (const auto& d : derived)
+            m_builtin_base[d.first] = d.second;
     };
 
     try {
@@ -70,32 +79,78 @@ void FilamentTypeRegistry::load() const
         m_low_temp            = to_normalized_set(j.at("low_temp_filament").get<std::vector<std::string>>());
         m_high_low_compatible = to_normalized_set(j.at("high_low_compatible_filament").get<std::vector<std::string>>());
 
-        // Optional: canonical base types used to infer the base of an unknown/custom type.
+        // Built-in base types map to themselves (this is what marks them as built-in).
         if (j.contains("base_types"))
-            for (const auto& e : j.at("base_types").get<std::vector<std::string>>())
-                m_base_candidates.push_back(normalize(e));
-
-        // Optional: explicit derived -> base mapping (overrides prefix inference).
+            for (const auto& e : j.at("base_types").get<std::vector<std::string>>()) {
+                const std::string n = normalize(e);
+                m_builtin_base[n] = n;
+            }
+        // Derived built-ins explicitly map to their base.
         if (j.contains("base_type"))
             for (const auto& kv : j.at("base_type").items())
-                m_explicit_base[normalize(kv.key())] = normalize(kv.value().get<std::string>());
+                m_builtin_base[normalize(kv.key())] = normalize(kv.value().get<std::string>());
 
-        // If no explicit base list was provided, fall back to every known type as a candidate.
-        if (m_base_candidates.empty()) {
-            for (const auto* set : {&m_high_temp, &m_low_temp, &m_high_low_compatible})
-                for (const auto& t : *set)
-                    m_base_candidates.push_back(t);
-        }
+        if (m_builtin_base.empty())
+            set_defaults();
     } catch (const std::exception& err) {
         BOOST_LOG_TRIVIAL(error) << "FilamentTypeRegistry: failed to load filament_info.json (" << err.what()
                                  << "); using built-in defaults";
         set_defaults();
     }
+}
 
-    // Longest base first, so the most specific prefix wins (e.g. PCTG before PC).
-    std::sort(m_base_candidates.begin(), m_base_candidates.end(),
-              [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
-    m_base_candidates.erase(std::unique(m_base_candidates.begin(), m_base_candidates.end()), m_base_candidates.end());
+void FilamentTypeRegistry::load_custom() const
+{
+    namespace fs = boost::filesystem;
+    using nlohmann::json;
+    try {
+        const fs::path file_path = fs::path(data_dir()) / "custom_filament_types.json";
+        if (!fs::exists(file_path))
+            return;
+        boost::nowide::ifstream in(file_path.string());
+        const json j = json::parse(in);
+        std::lock_guard<std::mutex> lock(m_custom_mutex);
+        for (const auto& kv : j.items())
+            m_custom_base[normalize(kv.key())] = normalize(kv.value().get<std::string>());
+    } catch (const std::exception& err) {
+        BOOST_LOG_TRIVIAL(warning) << "FilamentTypeRegistry: failed to load custom_filament_types.json ("
+                                   << err.what() << "); ignoring user custom types";
+    }
+}
+
+void FilamentTypeRegistry::add_custom_type(const std::string& name, const std::string& base)
+{
+    namespace fs = boost::filesystem;
+    using nlohmann::json;
+
+    ensure_loaded();
+    const std::string n = normalize(name);
+    const std::string b = normalize(base);
+    if (n.empty())
+        return;
+    // A custom type must not shadow a built-in, and must not be its own base.
+    if (m_builtin_base.count(n) != 0 || n == b)
+        return;
+
+    json out = json::object();
+    {
+        std::lock_guard<std::mutex> lock(m_custom_mutex);
+        if (b.empty())
+            m_custom_base.erase(n);
+        else
+            m_custom_base[n] = b;
+        for (const auto& kv : m_custom_base)
+            out[kv.first] = kv.second;
+    }
+    // Persist outside the lock (small file, infrequent).
+    try {
+        const fs::path file_path = fs::path(data_dir()) / "custom_filament_types.json";
+        boost::nowide::ofstream o(file_path.string());
+        o << out.dump(2);
+    } catch (const std::exception& err) {
+        BOOST_LOG_TRIVIAL(error) << "FilamentTypeRegistry: failed to persist custom_filament_types.json ("
+                                 << err.what() << ")";
+    }
 }
 
 FilamentTempType FilamentTypeRegistry::classify(const std::string& n) const
@@ -107,6 +162,23 @@ FilamentTempType FilamentTypeRegistry::classify(const std::string& n) const
     return Undefine;
 }
 
+bool FilamentTypeRegistry::is_builtin(const std::string& filament_type) const
+{
+    ensure_loaded();
+    return m_builtin_base.count(normalize(filament_type)) != 0;
+}
+
+std::vector<std::string> FilamentTypeRegistry::base_types() const
+{
+    ensure_loaded();
+    std::vector<std::string> out;
+    for (const auto& kv : m_builtin_base)
+        if (kv.first == kv.second) // base types map to themselves
+            out.push_back(kv.first);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 std::string FilamentTypeRegistry::base_type(const std::string& filament_type) const
 {
     ensure_loaded();
@@ -114,18 +186,15 @@ std::string FilamentTypeRegistry::base_type(const std::string& filament_type) co
     if (n.empty())
         return {};
 
-    // Explicit mapping wins.
-    const auto it = m_explicit_base.find(n);
-    if (it != m_explicit_base.end())
+    // Built-in map first (immutable, lock-free); then the user-custom map.
+    const auto it = m_builtin_base.find(n);
+    if (it != m_builtin_base.end())
         return it->second;
 
-    // Longest canonical base that equals n, or is a prefix of n followed by a separator.
-    for (const auto& base : m_base_candidates) { // already sorted longest-first
-        if (n == base)
-            return base;
-        if (n.size() > base.size() && n.compare(0, base.size(), base) == 0 && is_type_separator(n[base.size()]))
-            return base;
-    }
+    std::lock_guard<std::mutex> lock(m_custom_mutex);
+    const auto cit = m_custom_base.find(n);
+    if (cit != m_custom_base.end())
+        return cit->second;
     return {};
 }
 
@@ -133,18 +202,15 @@ std::string FilamentTypeRegistry::effective_type(const std::string& filament_typ
 {
     ensure_loaded();
     const std::string n = normalize(filament_type);
-    // A type the registry recognizes (built-in) keeps its own identity, so built-in behavior
-    // is preserved exactly; only unrecognized custom types fall through to their base.
-    if (classify(n) != Undefine || m_explicit_base.count(n) != 0)
+    // A shipped built-in (base OR derived) keeps its own identity, so built-in behavior is
+    // preserved exactly. This check is lock-free.
+    if (m_builtin_base.count(n) != 0)
         return n;
-    const std::string base = base_type(filament_type);
-    return base.empty() ? n : base;
-}
-
-bool FilamentTypeRegistry::is_known(const std::string& filament_type) const
-{
-    ensure_loaded();
-    return classify(normalize(filament_type)) != Undefine;
+    // A user custom type resolves to its explicitly-chosen base; an undeclared type resolves
+    // to itself (no inheritance — inheritance is never inferred from the name).
+    std::lock_guard<std::mutex> lock(m_custom_mutex);
+    const auto it = m_custom_base.find(n);
+    return it != m_custom_base.end() ? it->second : n;
 }
 
 FilamentTempType FilamentTypeRegistry::temp_type(const std::string& filament_type) const
@@ -157,7 +223,7 @@ FilamentTempType FilamentTypeRegistry::temp_type(const std::string& filament_typ
     if (direct != Undefine)
         return direct;
 
-    // 2) Resolve through the base type (explicit mapping or inferred prefix).
+    // 2) Resolve through the explicitly-declared base type.
     const std::string base = base_type(filament_type);
     if (!base.empty() && base != n)
         return classify(base);

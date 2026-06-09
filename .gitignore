@@ -24,6 +24,8 @@ build_*/
 SVG
 src/OrcaSlicer-doc/
 /.cache/
+# Generated user-data file (FilamentTypeRegistry custom types); lives in data_dir, not the repo.
+custom_filament_types.json
 *.mo
 **/process_full/
 **/machine_full/
