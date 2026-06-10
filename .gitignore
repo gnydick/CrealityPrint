@@ -67,3 +67,4 @@ flatbuild
 # Keep skill assets — the broad install_* / build_* patterns above would otherwise
 # ignore the build-crealityprint skill's install_*.ps1 scripts.
 !.claude/skills/**
+package/runtime/MicrosoftEdgeWebView2RuntimeInstallerX64.exe
