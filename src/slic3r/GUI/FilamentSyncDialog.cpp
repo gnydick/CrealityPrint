@@ -45,8 +45,14 @@ static void add_string_param(const DynamicPrintConfig &cfg, std::vector<std::pai
                              const char *param, const char *key)
 {
     const auto *opt = cfg.option<ConfigOptionStrings>(key);
-    if (opt && !opt->values.empty() && !opt->values.front().empty())
-        out.emplace_back(param, opt->values.front());
+    if (!opt || opt->values.empty())
+        return;
+    const std::string &value = opt->values.front();
+    // "\"\"" is the slicer's legacy serialization of an unset color; neither it
+    // nor an empty value belongs on the printer.
+    if (value.empty() || value == "\"\"")
+        return;
+    out.emplace_back(param, value);
 }
 
 static void add_int_param(const DynamicPrintConfig &cfg, std::vector<std::pair<std::string, std::string>> &out,
@@ -553,9 +559,10 @@ void FilamentSyncDialog::start_pull(const std::vector<SyncDevice> &targets)
                     ConfigSubstitutionContext ctx(ForwardCompatibilitySubstitutionRule::EnableSilent);
                     for (const auto &kv : entry.second.second) {
                         std::string value = kv.second;
-                        // Empty values would erase existing settings; gcode-registered
+                        // Empty values would erase existing settings, and "\"\"" is
+                        // legacy junk from pushed unset colors. Gcode-registered
                         // materials cannot carry '#' so colors may arrive bare.
-                        if (value.empty())
+                        if (value.empty() || value == "\"\"")
                             continue;
                         if (kv.first == "default_filament_colour" && value.front() != '#' && value.size() == 6 &&
                             value.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos)
