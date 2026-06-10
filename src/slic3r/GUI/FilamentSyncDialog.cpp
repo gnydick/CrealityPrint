@@ -370,6 +370,11 @@ static std::string post_material(const SyncDevice &dev, const std::vector<std::p
     std::string canonical_id;
     bool        ok = false;
     Http        http = Http::post(url);
+    // A non-empty body is required: Http::priv::http_perform installs a file
+    // read callback unconditionally, and a body-less POST makes libcurl invoke
+    // it with a garbage userp (hard crash). All request data is in the query
+    // string; the printer ignores the body.
+    http.set_post_body(std::string("{}"));
     http.timeout_connect(5)
         .timeout_max(15)
         .on_complete([&canonical_id, &ok](std::string body, unsigned status) {
