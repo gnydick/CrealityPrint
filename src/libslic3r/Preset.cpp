@@ -2405,7 +2405,7 @@ bool PresetCollection::clone_presets_for_filament(Preset const *const &     pres
     return clone_presets(presets, failures, [&filament_name, &filament_id, &dynamic_config, &compatible_printers](Preset &preset, Preset::Type &type) {
         preset.name        = filament_name + " @" + compatible_printers;
         if (type == Preset::TYPE_FILAMENT) {
-            preset.config.apply_only(dynamic_config, {"filament_vendor", "compatible_printers", "filament_type"},true);
+            preset.config.apply_only(dynamic_config, dynamic_config.keys(), true);
 
             preset.filament_id = filament_id;
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " " << __LINE__ << preset.name << " is cloned and filament_id: " << filament_id;

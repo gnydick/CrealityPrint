@@ -1207,6 +1207,46 @@ wxBoxSizer *CreateFilamentPresetDialog::create_button_item()
 
         std::string user_filament_id     = get_filament_id(filament_preset_name);
 
+        // Seed the parameterized material behavior fields from the chosen type so a
+        // cross-type clone (e.g. PLA seed for a TPU filament) starts with sensible
+        // values. Mirrors scripts/migrate_builtin_filament_profiles.py (§5 table);
+        // every field stays editable in the filament editor afterwards.
+        auto seed_material_behavior = [](DynamicConfig &cfg, const std::string &ft) {
+            static const std::unordered_map<std::string, int> temp_type = {
+                {"ABS", 0}, {"ASA", 0}, {"PC", 0}, {"PA", 0}, {"PA-CF", 0}, {"PA-GF", 0},
+                {"PA6-CF", 0}, {"PET-CF", 0}, {"PPS", 0}, {"PPS-CF", 0}, {"PPA-CF", 0},
+                {"PPA-GF", 0}, {"ABS-GF", 0}, {"ASA-Aero", 0},
+                {"PLA", 1}, {"TPU", 1}, {"PLA-CF", 1}, {"PLA-AERO", 1}, {"PVA", 1}, {"BVOH", 1},
+                {"HIPS", 2}, {"PETG", 2}, {"PE", 2}, {"PP", 2}, {"EVA", 2},
+                {"PE-CF", 2}, {"PP-CF", 2}, {"PP-GF", 2}, {"PHA", 2},
+            };
+            static const std::unordered_map<std::string, double> bed_adhesion = {
+                {"PET", 0.3}, {"PETG", 0.3}, {"ABS", 0.1}, {"ASA", 0.1},
+            };
+            static const std::unordered_map<std::string, double> thermal_length = {
+                {"ABS", 100.0}, {"PA-CF", 100.0}, {"PET-CF", 100.0}, {"PC", 40.0}, {"TPU", 1000.0},
+            };
+            static const std::unordered_map<std::string, double> brim_adhesion = {
+                {"PETG", 2.0}, {"PCTG", 2.0}, {"TPU", 0.5},
+            };
+            static const std::unordered_map<std::string, int> chamber_limit = {
+                {"PLA", 45}, {"PLA-CF", 45}, {"PVA", 45}, {"TPU", 50},
+                {"PETG", 55}, {"PCTG", 55}, {"PETG-CF", 55},
+            };
+            auto find_or = [](const auto &table, const std::string &key, auto fallback) {
+                auto it = table.find(key);
+                return it == table.end() ? fallback : it->second;
+            };
+            cfg.set_key_value("filament_temp_type", new ConfigOptionInts({find_or(temp_type, ft, 3)}));
+            cfg.set_key_value("filament_cooling_smart_zone", new ConfigOptionBools({ft == "PLA" || ft == "PETG" || ft == "ABS"}));
+            cfg.set_key_value("filament_bed_adhesion_strength", new ConfigOptionFloats({find_or(bed_adhesion, ft, 0.02)}));
+            cfg.set_key_value("filament_thermal_length", new ConfigOptionFloats({find_or(thermal_length, ft, 200.0)}));
+            cfg.set_key_value("filament_brim_adhesion_coeff", new ConfigOptionFloats({find_or(brim_adhesion, ft, 1.0)}));
+            cfg.set_key_value("filament_small_island_threshold", new ConfigOptionFloats({ft == "PETG" ? 20.0 : 10.0}));
+            cfg.set_key_value("filament_chamber_temp_limit", new ConfigOptionInts({find_or(chamber_limit, ft, 0)}));
+            cfg.set_key_value("filament_is_flexible", new ConfigOptionBools({ft == "TPU"}));
+        };
+
         const wxString &curr_create_type = curr_create_filament_type();
 
         if (curr_create_type == m_create_type.base_filament) {
@@ -1220,6 +1260,7 @@ wxBoxSizer *CreateFilamentPresetDialog::create_button_item()
                     dynamic_config.set_key_value("filament_vendor", new ConfigOptionStrings({vendor_name}));
                     dynamic_config.set_key_value("compatible_printers", new ConfigOptionStrings({compatible_printer_name}));
                     dynamic_config.set_key_value("filament_type", new ConfigOptionStrings({type_name}));
+                    seed_material_behavior(dynamic_config, type_name);
                     bool res = preset_bundle->filaments.clone_presets_for_filament(checked_preset, failures, filament_preset_name, user_filament_id, dynamic_config,
                                                                                    compatible_printer_name);
                     if (!res) {
@@ -1247,6 +1288,7 @@ wxBoxSizer *CreateFilamentPresetDialog::create_button_item()
                     dynamic_config.set_key_value("filament_vendor", new ConfigOptionStrings({vendor_name}));
                     dynamic_config.set_key_value("compatible_printers", new ConfigOptionStrings({compatible_printer_name}));
                     dynamic_config.set_key_value("filament_type", new ConfigOptionStrings({type_name}));
+                    seed_material_behavior(dynamic_config, type_name);
                     bool res = preset_bundle->filaments.clone_presets_for_filament(checked_preset, failures, filament_preset_name, user_filament_id, dynamic_config,
                                                                                    compatible_printer_name);
                     if (!res) {
@@ -1436,7 +1478,6 @@ void CreateFilamentPresetDialog::get_filament_presets_by_machine()
 
     std::unordered_map<std::string, float>                 nozzle_diameter = nozzle_diameter_map;
     std::unordered_map<std::string, std::vector<Preset *>> machine_name_to_presets;
-    PresetBundle *                                         preset_bundle = wxGetApp().preset_bundle;
     for (std::pair<std::string, Preset*> filament_preset : m_all_presets_map) {
         Preset *    preset      = filament_preset.second;
         auto    compatible_printers = preset->config.option<ConfigOptionStrings>("compatible_printers", true);
@@ -1449,25 +1490,9 @@ void CreateFilamentPresetDialog::get_filament_presets_by_machine()
                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " compatable printer is not visible and preset name is: " << preset->name;
                 continue;
             }
-            Preset *             inherit_preset = nullptr;
-            auto inherit = dynamic_cast<ConfigOptionString*>(preset->config.option(BBL_JSON_KEY_INHERITS,false));
-            if (inherit && !inherit->value.empty()) {
-                std::string inherits_value = inherit->value;
-                inherit_preset             = preset_bundle->filaments.find_preset(inherits_value, false, true);
-            }
-            ConfigOptionStrings *filament_types;
-            if (!inherit_preset) {
-                filament_types = dynamic_cast<ConfigOptionStrings *>(preset->config.option("filament_type"));
-            } else {
-                filament_types = dynamic_cast<ConfigOptionStrings *>(inherit_preset->config.option("filament_type"));
-            }
-
-            if (filament_types && filament_types->values.empty()) continue;
-            const std::string filament_type = filament_types->values[0];
-            if (filament_type != filament_base) {
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " preset type is not selected type and preset name is: " << preset->name;
-                continue;
-            }
+            // Printer-filament association is a plain many-to-many: every visible
+            // printer is offered regardless of the selected filament type. The type
+            // only influences which preset seeds the clone (see sort below).
             std::string nozzle = get_printer_nozzle_diameter(compatible_printer_name);
             if (nozzle_diameter[nozzle] == 0) {
                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " compatible printer nozzle encounter exception and name is: " << compatible_printer_name;
@@ -1476,6 +1501,19 @@ void CreateFilamentPresetDialog::get_filament_presets_by_machine()
             machine_name_to_presets[compatible_printer_name].push_back(preset);
         }
     }
+    // Prefer presets whose filament_type matches the selected type as the clone
+    // seed; any preset works, the match just gives more sensible starting values.
+    auto preset_type_matches = [&filament_base](const Preset* preset) {
+        const auto* types = dynamic_cast<const ConfigOptionStrings*>(preset->config.option("filament_type"));
+        return types && !types->values.empty() && types->values[0] == filament_base;
+    };
+    for (auto& machine_filament_presets : machine_name_to_presets) {
+        std::stable_sort(machine_filament_presets.second.begin(), machine_filament_presets.second.end(),
+                         [&preset_type_matches](const Preset* a, const Preset* b) {
+                             return preset_type_matches(a) && !preset_type_matches(b);
+                         });
+    }
+
     std::vector<std::pair<std::string, std::vector<Preset *>>> printer_name_to_filament_presets;
     for (std::pair<std::string, std::vector<Preset *>> machine_filament_presets : machine_name_to_presets) {
         printer_name_to_filament_presets.push_back(machine_filament_presets);
