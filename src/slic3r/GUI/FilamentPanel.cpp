@@ -860,7 +860,7 @@ void FilamentPopPanel::OnPaint(wxPaintEvent& event)
     wxPaintDC dc(this);
     wxSize    sz = GetSize();
 
-    dc.SetPen(*wxGREEN_PEN);
+    dc.SetPen(wxPen(wxColour(46, 134, 193)));
     dc.SetBrush(*wxTRANSPARENT_BRUSH);
 
     const int radius = 6;

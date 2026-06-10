@@ -452,8 +452,7 @@ void BBLTopbarArt::DrawButton(wxDC& dc, wxWindow* wnd, const wxAuiToolBarItem& i
                 // path.AddRectangle(rect.x, rect.y, rect.width, rect.height);
                 path.AddRoundedRectangle(rect.x, rect.y, rect.width, rect.height, wnd->FromDIP(2));
 
-                // gc->SetBrush(*wxGREEN_BRUSH);
-                gc->SetPen(*wxGREEN_PEN);
+                gc->SetPen(wxPen(StateColor::darkModeColorFor("#2E86C1")));
                 gc->SetAntialiasMode(wxANTIALIAS_DEFAULT);
                 // gc->DrawRoundedRectangle(rect.x, rect.y, rect.width, rect.height, 3);
 
