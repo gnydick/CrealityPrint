@@ -6,6 +6,7 @@
 #include "MsgDialog.hpp"
 #include "Widgets/Button.hpp"
 #include "Widgets/CheckBox.hpp"
+#include "print_manage/PrinterMgr.hpp"
 #include "print_manage/data/DataCenter.hpp"
 #include "slic3r/Utils/Http.hpp"
 
@@ -14,6 +15,9 @@
 
 #include <boost/log/trivial.hpp>
 #include <boost/thread.hpp>
+
+#include <map>
+#include <set>
 
 #include <wx/scrolwin.h>
 #include <wx/sizer.h>
@@ -149,21 +153,31 @@ std::vector<SyncDevice> FilamentSyncDialog::collect_devices()
 {
     std::vector<SyncDevice> devices;
     try {
-        const nlohmann::json data = DM::DataCenter::Ins().GetData();
-        if (!data.contains("data") || !data["data"].contains("printerList"))
-            return devices;
-        for (const auto &group : data["data"]["printerList"]) {
-            if (!group.contains("list"))
-                continue;
-            for (const auto &printer : group["list"]) {
-                if (!printer.contains("address"))
+        // DeviceMgr is the persisted store behind the Device page; the runtime
+        // DataCenter json is only filled once that webview has loaded, so it is
+        // consulted just for the online flag.
+        std::map<std::string, std::vector<DM::DeviceMgr::Data>> store;
+        std::vector<std::string>                                order;
+        DM::DeviceMgr::Ins().Get(store, order);
+        if (store.empty()) {
+            DM::DeviceMgr::Ins().Load();
+            DM::DeviceMgr::Ins().Get(store, order);
+        }
+
+        std::set<std::string> seen;
+        for (const auto &group : store) {
+            for (const auto &data : group.second) {
+                if (data.address.empty() || !seen.insert(data.address).second)
                     continue;
                 SyncDevice dev;
-                dev.address = printer["address"].get<std::string>();
-                dev.name    = printer.contains("name") ? printer["name"].get<std::string>() : dev.address;
-                dev.online  = printer.contains("online") && printer["online"].get<bool>();
-                if (!dev.address.empty())
-                    devices.push_back(std::move(dev));
+                dev.address = data.address;
+                dev.name    = data.name.empty() ? data.address : data.name;
+                try {
+                    dev.online = DM::DataCenter::Ins().get_printer_data(data.address).online;
+                } catch (...) {
+                    dev.online = false;
+                }
+                devices.push_back(std::move(dev));
             }
         }
     } catch (const std::exception &e) {
