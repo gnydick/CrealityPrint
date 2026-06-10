@@ -138,6 +138,18 @@ static MaterialPayload payload_from_preset(const Preset &preset)
     add_bool_param(cfg, p, "soluble", "filament_soluble");
     add_bool_param(cfg, p, "support", "filament_is_support");
 
+    // Parameterized material behavior fields (SanityPrint extension). The param
+    // names are the literal slicer config keys; the printer stores them verbatim
+    // in kvParam, which makes Pull apply them generically with no further mapping.
+    add_int_param(cfg, p, "filament_temp_type", "filament_temp_type");
+    add_bool_param(cfg, p, "filament_cooling_smart_zone", "filament_cooling_smart_zone");
+    add_float_param(cfg, p, "filament_bed_adhesion_strength", "filament_bed_adhesion_strength");
+    add_float_param(cfg, p, "filament_thermal_length", "filament_thermal_length");
+    add_float_param(cfg, p, "filament_brim_adhesion_coeff", "filament_brim_adhesion_coeff");
+    add_float_param(cfg, p, "filament_small_island_threshold", "filament_small_island_threshold");
+    add_int_param(cfg, p, "filament_chamber_temp_limit", "filament_chamber_temp_limit");
+    add_bool_param(cfg, p, "filament_is_flexible", "filament_is_flexible");
+
     return payload;
 }
 
