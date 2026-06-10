@@ -3,6 +3,7 @@
 #include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "I18N.hpp"
+#include "MainFrame.hpp"
 #include "MsgDialog.hpp"
 #include "Widgets/Button.hpp"
 #include "Widgets/CheckBox.hpp"
@@ -16,6 +17,7 @@
 #include <boost/log/trivial.hpp>
 #include <boost/thread.hpp>
 
+#include <algorithm>
 #include <map>
 #include <set>
 
@@ -104,12 +106,12 @@ static MaterialPayload payload_from_preset(const Preset &preset)
     }
     p.emplace_back("name", preset.name); // upsert identity key
 
-    // Carry the slicer's filament id onto the printer as base.id so catalog
-    // rows trace back to the preset. New user presets mint 5-char ids (P####,
-    // the K2/CFS material-code convention); the substr is a safety net for
-    // presets created before that change (8-char P+md5 ids).
-    if (!preset.filament_id.empty() && preset.filament_id != "null")
-        p.emplace_back("id", preset.filament_id.substr(0, 5));
+    // Only canonical ids (printer-minted, previously adopted) are sent, so all
+    // printers converge on one id. Slicer placeholder ids (P-prefixed) are
+    // omitted: the printer mints U#### and start_sync adopts it from the
+    // upsert response.
+    if (!preset.filament_id.empty() && preset.filament_id != "null" && preset.filament_id.front() != 'P')
+        p.emplace_back("id", preset.filament_id);
 
     add_string_param(cfg, p, "type", "filament_type");
     add_string_param(cfg, p, "color", "default_filament_colour");
@@ -283,12 +285,19 @@ FilamentSyncDialog::FilamentSyncDialog(wxWindow *parent)
                             std::pair<wxColour, int>(wxColour(238, 238, 238), StateColor::Hovered),
                             std::pair<wxColour, int>(*wxWHITE, StateColor::Normal));
 
-    m_sync_button = new Button(this, _L("Sync"));
+    m_sync_button = new Button(this, _L("Push"));
     m_sync_button->SetBackgroundColor(btn_bg_blue);
     m_sync_button->SetTextColor(wxColour("#FFFFFE"));
     m_sync_button->SetMinSize(wxSize(FromDIP(58), FromDIP(24)));
     m_sync_button->SetCornerRadius(FromDIP(12));
     btn_sizer->Add(m_sync_button, 0, wxRIGHT, FromDIP(10));
+
+    m_pull_button = new Button(this, _L("Pull"));
+    m_pull_button->SetBackgroundColor(btn_bg_blue);
+    m_pull_button->SetTextColor(wxColour("#FFFFFE"));
+    m_pull_button->SetMinSize(wxSize(FromDIP(58), FromDIP(24)));
+    m_pull_button->SetCornerRadius(FromDIP(12));
+    btn_sizer->Add(m_pull_button, 0, wxRIGHT, FromDIP(10));
 
     auto *cancel_button = new Button(this, _L("Cancel"));
     cancel_button->SetBackgroundColor(btn_bg_white);
@@ -299,16 +308,9 @@ FilamentSyncDialog::FilamentSyncDialog(wxWindow *parent)
     main_sizer->Add(btn_sizer, 0, wxEXPAND | wxALL, FromDIP(15));
 
     m_sync_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
-        std::vector<SyncDevice> targets;
-        for (auto &row : m_device_rows)
-            if (row.first->GetValue())
-                targets.push_back(row.second);
-        if (targets.empty()) {
-            MessageDialog dlg(this, _L("Please select at least one printer."),
-                              wxString(SLIC3R_APP_FULL_NAME) + " - " + _L("Info"), wxOK | wxCENTRE);
-            dlg.ShowModal();
+        std::vector<SyncDevice> targets = selected_targets(true);
+        if (targets.empty())
             return;
-        }
         if (m_filament_count == 0) {
             MessageDialog dlg(this, _L("There are no custom filaments to sync."),
                               wxString(SLIC3R_APP_FULL_NAME) + " - " + _L("Info"), wxOK | wxCENTRE);
@@ -318,11 +320,74 @@ FilamentSyncDialog::FilamentSyncDialog(wxWindow *parent)
         start_sync(targets);
         EndModal(wxID_OK);
     });
+    m_pull_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+        std::vector<SyncDevice> targets = selected_targets(true);
+        if (targets.empty())
+            return;
+        start_pull(targets);
+        EndModal(wxID_OK);
+    });
     cancel_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_CANCEL); });
 
     SetSizerAndFit(main_sizer);
     CenterOnParent();
     wxGetApp().UpdateDlgDarkUI(this);
+}
+
+std::vector<SyncDevice> FilamentSyncDialog::selected_targets(bool require_any)
+{
+    std::vector<SyncDevice> targets;
+    for (auto &row : m_device_rows)
+        if (row.first->GetValue())
+            targets.push_back(row.second);
+    if (targets.empty() && require_any) {
+        MessageDialog dlg(this, _L("Please select at least one printer."),
+                          wxString(SLIC3R_APP_FULL_NAME) + " - " + _L("Info"), wxOK | wxCENTRE);
+        dlg.ShowModal();
+    }
+    return targets;
+}
+
+// A slicer-minted id (P-prefixed) is a placeholder; canonical ids are minted by
+// the printer (U####) and adopted by the slicer on first successful push.
+static bool is_placeholder_id(const std::string &id)
+{
+    return id.empty() || id == "null" || id.front() == 'P';
+}
+
+// POST one material to one device. Returns the canonical id from the response
+// (empty on failure).
+static std::string post_material(const SyncDevice &dev, const std::vector<std::pair<std::string, std::string>> &params,
+                                 const std::string &preset_name)
+{
+    std::string url = "http://" + dev.address + ":" + std::to_string(MATERIAL_API_PORT) + "/server/material";
+    char        sep = '?';
+    for (const auto &kv : params) {
+        url += sep + kv.first + "=" + Http::url_encode(kv.second);
+        sep = '&';
+    }
+
+    std::string canonical_id;
+    bool        ok = false;
+    Http        http = Http::post(url);
+    http.timeout_connect(5)
+        .timeout_max(15)
+        .on_complete([&canonical_id, &ok](std::string body, unsigned status) {
+            if (status != 200)
+                return;
+            ok = true;
+            try {
+                nlohmann::json j = nlohmann::json::parse(body);
+                if (j.contains("result") && j["result"].contains("id"))
+                    canonical_id = j["result"]["id"].get<std::string>();
+            } catch (...) {}
+        })
+        .on_error([&preset_name, &dev](std::string /*body*/, std::string error, unsigned status) {
+            BOOST_LOG_TRIVIAL(error) << "FilamentSync: POST failed for '" << preset_name << "' on " << dev.address
+                                     << " status=" << status << " error=" << error;
+        })
+        .perform_sync();
+    return ok ? (canonical_id.empty() ? std::string("?") : canonical_id) : std::string();
 }
 
 void FilamentSyncDialog::start_sync(const std::vector<SyncDevice> &targets)
@@ -331,46 +396,156 @@ void FilamentSyncDialog::start_sync(const std::vector<SyncDevice> &targets)
     auto devices  = std::make_shared<std::vector<SyncDevice>>(targets);
 
     boost::thread([payloads, devices]() {
-        int  ok_count   = 0;
-        int  fail_count = 0;
+        int         ok_count   = 0;
+        int         fail_count = 0;
         std::string failures;
+        // preset name -> printer-minted canonical id to adopt
+        auto reconciled = std::make_shared<std::map<std::string, std::string>>();
 
-        for (const SyncDevice &dev : *devices) {
-            for (const MaterialPayload &payload : *payloads) {
-                std::string url = "http://" + dev.address + ":" + std::to_string(MATERIAL_API_PORT) + "/server/material";
-                char        sep = '?';
-                for (const auto &kv : payload.params) {
-                    url += sep + kv.first + "=" + Http::url_encode(kv.second);
-                    sep = '&';
-                }
+        try {
+            for (MaterialPayload &payload : *payloads) {
+                // Find the current id param (set when the preset already has a
+                // canonical id; absent for placeholders).
+                auto id_it = std::find_if(payload.params.begin(), payload.params.end(),
+                                          [](const auto &kv) { return kv.first == "id"; });
+                bool have_canonical = id_it != payload.params.end();
 
-                bool success = false;
-                Http http    = Http::post(url);
-                http.timeout_connect(5)
-                    .timeout_max(15)
-                    .on_complete([&success](std::string /*body*/, unsigned status) { success = status == 200; })
-                    .on_error([&](std::string body, std::string error, unsigned status) {
-                        BOOST_LOG_TRIVIAL(error) << "FilamentSync: POST failed for '" << payload.preset_name
-                                                 << "' on " << dev.address << " status=" << status
-                                                 << " error=" << error;
-                    })
-                    .perform_sync();
-
-                if (success)
+                for (const SyncDevice &dev : *devices) {
+                    std::string got_id = post_material(dev, payload.params, payload.preset_name);
+                    if (got_id.empty()) {
+                        ++fail_count;
+                        if (failures.size() < 600)
+                            failures += "\n" + payload.preset_name + " -> " + dev.name;
+                        continue;
+                    }
                     ++ok_count;
-                else {
-                    ++fail_count;
-                    if (failures.size() < 600)
-                        failures += "\n" + payload.preset_name + " -> " + dev.name;
+                    // First successful response of a placeholder push: adopt the
+                    // printer-minted id and include it for the remaining devices,
+                    // so all printers converge on one id.
+                    if (!have_canonical && got_id != "?") {
+                        payload.params.emplace_back("id", got_id);
+                        have_canonical = true;
+                        (*reconciled)[payload.preset_name] = got_id;
+                    }
                 }
             }
+        } catch (const std::exception &e) {
+            BOOST_LOG_TRIVIAL(error) << "FilamentSync: push thread exception: " << e.what();
         }
 
-        wxGetApp().CallAfter([ok_count, fail_count, failures]() {
+        wxGetApp().CallAfter([ok_count, fail_count, failures, reconciled]() {
+            // Adopt printer-minted ids on the main thread (preset bundle is not
+            // thread safe) and persist them.
+            int adopted = 0;
+            try {
+                PresetBundle *bundle = wxGetApp().preset_bundle;
+                for (const auto &entry : *reconciled) {
+                    Preset *preset = bundle->filaments.find_preset(entry.first, false, true);
+                    if (preset && preset->is_user() && is_placeholder_id(preset->filament_id)) {
+                        preset->filament_id = entry.second;
+                        preset->save(nullptr);
+                        ++adopted;
+                    }
+                }
+            } catch (const std::exception &e) {
+                BOOST_LOG_TRIVIAL(error) << "FilamentSync: id reconciliation failed: " << e.what();
+            }
+
             wxString msg = wxString::Format(_L("Filament sync finished: %d pushed, %d failed."), ok_count, fail_count);
+            if (adopted > 0)
+                msg += "\n" + wxString::Format(_L("%d filament(s) adopted printer-assigned ids."), adopted);
             if (fail_count > 0)
                 msg += "\n" + from_u8(failures);
-            MessageDialog dlg(nullptr, msg, wxString(SLIC3R_APP_FULL_NAME) + " - " + _L("Sync Filaments"),
+            MessageDialog dlg(wxGetApp().mainframe, msg, wxString(SLIC3R_APP_FULL_NAME) + " - " + _L("Sync Filaments"),
+                              wxOK | wxCENTRE);
+            dlg.ShowModal();
+        });
+    }).detach();
+}
+
+void FilamentSyncDialog::start_pull(const std::vector<SyncDevice> &targets)
+{
+    auto devices = std::make_shared<std::vector<SyncDevice>>(targets);
+
+    boost::thread([devices]() {
+        // material name -> (id, kvParam) ; first device wins on duplicates
+        auto pulled = std::make_shared<std::map<std::string, std::pair<std::string, std::map<std::string, std::string>>>>();
+        int  fetch_fail = 0;
+
+        try {
+            for (const SyncDevice &dev : *devices) {
+                std::string url  = "http://" + dev.address + ":" + std::to_string(MATERIAL_API_PORT) + "/server/material";
+                bool        ok   = false;
+                std::string body_out;
+                Http http = Http::get(url);
+                http.timeout_connect(5)
+                    .timeout_max(15)
+                    .on_complete([&ok, &body_out](std::string body, unsigned status) {
+                        if (status == 200) { ok = true; body_out = std::move(body); }
+                    })
+                    .perform_sync();
+                if (!ok) { ++fetch_fail; continue; }
+                try {
+                    nlohmann::json j = nlohmann::json::parse(body_out);
+                    for (const auto &mat : j["result"]["materials"]) {
+                        if (!mat.contains("base") || !mat["base"].contains("name"))
+                            continue;
+                        std::string name = mat["base"]["name"].get<std::string>();
+                        if (pulled->count(name))
+                            continue;
+                        std::string id = mat["base"].contains("id") ? mat["base"]["id"].get<std::string>() : "";
+                        std::map<std::string, std::string> kv;
+                        if (mat.contains("kvParam"))
+                            for (auto it = mat["kvParam"].begin(); it != mat["kvParam"].end(); ++it)
+                                if (it.value().is_string())
+                                    kv[it.key()] = it.value().get<std::string>();
+                        (*pulled)[name] = {id, kv};
+                    }
+                } catch (const std::exception &e) {
+                    BOOST_LOG_TRIVIAL(error) << "FilamentSync: pull parse failed for " << dev.address << ": " << e.what();
+                    ++fetch_fail;
+                }
+            }
+        } catch (const std::exception &e) {
+            BOOST_LOG_TRIVIAL(error) << "FilamentSync: pull thread exception: " << e.what();
+        }
+
+        wxGetApp().CallAfter([pulled, fetch_fail]() {
+            int updated = 0, unmatched = 0;
+            std::string unmatched_names;
+            try {
+                PresetBundle *bundle = wxGetApp().preset_bundle;
+                for (const auto &entry : *pulled) {
+                    Preset *preset = bundle->filaments.find_preset(entry.first, false, true);
+                    if (!preset || !preset->is_user()) {
+                        ++unmatched;
+                        if (unmatched_names.size() < 400)
+                            unmatched_names += "\n" + entry.first;
+                        continue;
+                    }
+                    // kvParam keys are literal slicer config keys.
+                    ConfigSubstitutionContext ctx(ForwardCompatibilitySubstitutionRule::EnableSilent);
+                    for (const auto &kv : entry.second.second) {
+                        try {
+                            preset->config.set_deserialize(kv.first, kv.second, ctx);
+                        } catch (...) {}
+                    }
+                    if (!entry.second.first.empty() && is_placeholder_id(preset->filament_id))
+                        preset->filament_id = entry.second.first;
+                    preset->save(nullptr);
+                    ++updated;
+                }
+            } catch (const std::exception &e) {
+                BOOST_LOG_TRIVIAL(error) << "FilamentSync: pull apply failed: " << e.what();
+            }
+
+            wxString msg = wxString::Format(_L("Pull finished: %d preset(s) updated."), updated);
+            if (unmatched > 0)
+                msg += "\n" + wxString::Format(_L("%d material(s) exist only on the printer (no matching preset):"), unmatched)
+                     + from_u8(unmatched_names);
+            if (fetch_fail > 0)
+                msg += "\n" + wxString::Format(_L("%d printer(s) could not be reached."), fetch_fail);
+            MessageDialog dlg(wxGetApp().mainframe, msg, wxString(SLIC3R_APP_FULL_NAME) + " - " + _L("Sync Filaments"),
                               wxOK | wxCENTRE);
             dlg.ShowModal();
         });
