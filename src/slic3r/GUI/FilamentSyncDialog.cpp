@@ -528,13 +528,22 @@ void FilamentSyncDialog::start_pull(const std::vector<SyncDevice> &targets)
         }
 
         wxGetApp().CallAfter([pulled, fetch_fail]() {
-            int updated = 0, unmatched = 0;
+            int updated = 0, unmatched = 0, stock = 0;
             std::string unmatched_names;
             try {
                 PresetBundle *bundle = wxGetApp().preset_bundle;
                 for (const auto &entry : *pulled) {
                     Preset *preset = bundle->filaments.find_preset(entry.first, false, true);
                     if (!preset || !preset->is_user()) {
+                        // Only user-managed catalog rows are interesting: printer-minted
+                        // (U####) or slicer-pushed (P####) ids. Everything else is the
+                        // printer's built-in stock database, which the slicer already
+                        // mirrors as system presets.
+                        const std::string &id = entry.second.first;
+                        if (id.empty() || (id.front() != 'U' && id.front() != 'P')) {
+                            ++stock;
+                            continue;
+                        }
                         ++unmatched;
                         if (unmatched_names.size() < 400)
                             unmatched_names += "\n" + entry.first;
@@ -558,8 +567,10 @@ void FilamentSyncDialog::start_pull(const std::vector<SyncDevice> &targets)
 
             wxString msg = wxString::Format(_L("Pull finished: %d preset(s) updated."), updated);
             if (unmatched > 0)
-                msg += "\n" + wxString::Format(_L("%d material(s) exist only on the printer (no matching preset):"), unmatched)
+                msg += "\n" + wxString::Format(_L("%d custom material(s) exist only on the printer (no matching preset):"), unmatched)
                      + from_u8(unmatched_names);
+            if (stock > 0)
+                msg += "\n" + wxString::Format(_L("%d stock catalog material(s) ignored."), stock);
             if (fetch_fail > 0)
                 msg += "\n" + wxString::Format(_L("%d printer(s) could not be reached."), fetch_fail);
             MessageDialog dlg(wxGetApp().mainframe, msg, wxString(SLIC3R_APP_FULL_NAME) + " - " + _L("Sync Filaments"),

@@ -456,14 +456,23 @@ if (WIN32)
         install(TARGETS ${STARTUP_PROJECT_NAME} RUNTIME DESTINATION ".")
     endif ()
     install(FILES ${output_dlls_${build_type}} DESTINATION ".")
-    install(FILES ${CMAKE_SOURCE_DIR}/package/runtime/MicrosoftEdgeSetup.exe DESTINATION ".")
-    install(FILES ${CMAKE_SOURCE_DIR}/package/runtime/MicrosoftEdgeWebView2RuntimeInstallerX64.exe DESTINATION ".")
-    install(FILES ${CMAKE_SOURCE_DIR}/package/runtime/vcredist_x64.exe DESTINATION ".")
-    install(FILES ${CMAKE_SOURCE_DIR}/package/runtime/STLThumb-Windows_0.5.0.exe DESTINATION ".")
-    install(FILES ${CMAKE_SOURCE_DIR}/package/runtime/stl-thumb.exe DESTINATION ".")
-    install(FILES ${CMAKE_SOURCE_DIR}/package/runtime/STLThumbWinShellExtension.dll DESTINATION ".")
-    install(FILES ${CMAKE_SOURCE_DIR}/package/runtime/curl.exe DESTINATION ".")
-    install(FILES ${CMAKE_SOURCE_DIR}/package/runtime/libcurl.dll DESTINATION ".")
+    # Bundled runtime redistributables. The public source drop omits the large
+    # ones, so each is optional: present -> bundled, absent -> skipped.
+    foreach(_runtime_file
+            MicrosoftEdgeSetup.exe
+            MicrosoftEdgeWebView2RuntimeInstallerX64.exe
+            vcredist_x64.exe
+            STLThumb-Windows_0.5.0.exe
+            stl-thumb.exe
+            STLThumbWinShellExtension.dll
+            curl.exe
+            libcurl.dll)
+        if (EXISTS "${CMAKE_SOURCE_DIR}/package/runtime/${_runtime_file}")
+            install(FILES "${CMAKE_SOURCE_DIR}/package/runtime/${_runtime_file}" DESTINATION ".")
+        else ()
+            message(STATUS "Optional runtime redistributable not bundled (missing): ${_runtime_file}")
+        endif ()
+    endforeach()
     install(FILES ${CMAKE_SOURCE_DIR}/run_creality_on_e_cores.bat DESTINATION ".")
     install(FILES ${CMAKE_SOURCE_DIR}/tools/updater/updater.exe DESTINATION ".")
 else ()
