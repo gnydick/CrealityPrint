@@ -927,8 +927,7 @@ wxBoxSizer *CreateFilamentPresetDialog::create_type_item()
     wxBoxSizer *comboBoxSizer = new wxBoxSizer(wxVERTICAL);
     // Editable (no wxCB_READONLY): the listed system types are suggestions, but the user may type
     // an arbitrary custom type name. The typed value flows through GetLabel() to the saved
-    // filament_type; for a custom name the user picks its base explicitly in the base combobox
-    // below, which drives both the clone-source list and the persisted name->base mapping.
+    // filament_type; behavior comes from the per-preset material fields, seeded at save time.
     m_filament_type_combobox  = new ComboBox(this, wxID_ANY, wxEmptyString, wxDefaultPosition, NAME_OPTION_COMBOBOX_SIZE, 0, nullptr, 0);
     m_filament_type_combobox->SetLabel(_L("Select Type"));
     m_filament_type_combobox->SetLabelColor(DEFAULT_PROMPT_TEXT_COLOUR);
@@ -955,12 +954,23 @@ wxBoxSizer *CreateFilamentPresetDialog::create_type_item()
         e.Skip();
     });
 
-    // The combobox is editable: when the user types a custom type and presses Enter, re-run the
-    // same refresh as a dropdown selection so the clone-source list updates for the typed type.
-    m_filament_type_combobox->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent &e) {
+    // The combobox is editable: when the user types a custom type, re-run the same refresh
+    // as a dropdown selection so the clone-source and printer lists update for the typed
+    // type. Trigger on Enter and on focus leaving the field (typing alone fires no
+    // wxEVT_COMBOBOX, which used to leave the printer panel empty).
+    auto refresh_for_typed_type = [this]() {
+        if (m_filament_type_combobox->GetLabel().IsEmpty() || m_filament_type_combobox->GetLabel() == _L("Select Type"))
+            return;
         wxCommandEvent evt(wxEVT_COMBOBOX, m_filament_type_combobox->GetId());
         evt.SetEventObject(m_filament_type_combobox);
         m_filament_type_combobox->GetEventHandler()->ProcessEvent(evt);
+    };
+    m_filament_type_combobox->GetTextCtrl()->Bind(wxEVT_TEXT_ENTER, [refresh_for_typed_type](wxCommandEvent &e) {
+        refresh_for_typed_type();
+        e.Skip();
+    });
+    m_filament_type_combobox->GetTextCtrl()->Bind(wxEVT_KILL_FOCUS, [refresh_for_typed_type](wxFocusEvent &e) {
+        refresh_for_typed_type();
         e.Skip();
     });
 
@@ -1343,8 +1353,9 @@ wxArrayString CreateFilamentPresetDialog::get_filament_preset_choices()
     } else {
         type_name = into_u8(type_str);
     }
-    const std::string type_filter = into_u8(m_filament_type_combobox->GetLabel());
-
+    // Plain many-to-many: any base filament preset can serve as the clone source,
+    // including for custom type names that no existing preset declares. The chosen
+    // type and its behavior defaults are stamped onto the clone at save time.
     for (std::pair<std::string, Preset*> filament_presets : m_all_presets_map) {
         Preset *preset = filament_presets.second;
         auto    inherit = preset->config.option<ConfigOptionString>("inherits");
@@ -1354,8 +1365,6 @@ wxArrayString CreateFilamentPresetDialog::get_filament_preset_choices()
         }
         auto fila_type = preset->config.option<ConfigOptionStrings>("filament_type");
         if (!fila_type || fila_type->values.empty()) continue;
-        if (fila_type->values[0] != type_filter)
-            continue;
         m_filament_choice_map[preset->filament_id].push_back(preset);
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " base user preset is:" << preset->name;
     }
