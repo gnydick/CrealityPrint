@@ -12635,7 +12635,7 @@ bool is_soluble_filament(int extruder_id)
     auto& filament_presets = Slic3r::GUI::wxGetApp().preset_bundle->filament_presets;
     auto& filaments = Slic3r::GUI::wxGetApp().preset_bundle->filaments;
 
-    if (extruder_id >= filament_presets.size()) return false;
+    if (extruder_id < 0 || extruder_id >= (int)filament_presets.size()) return false;
 
     Slic3r::Preset* filament = filaments.find_preset(filament_presets[extruder_id]);
     if (filament == nullptr) return false;
@@ -12670,7 +12670,9 @@ bool is_support_filament(int extruder_id, bool strict_check)
     auto& filament_presets = Slic3r::GUI::wxGetApp().preset_bundle->filament_presets;
     auto& filaments = Slic3r::GUI::wxGetApp().preset_bundle->filaments;
 
-    if (extruder_id >= (int)filament_presets.size()) return false;
+    // extruder_id can be wxNOT_FOUND (-1) while combos repopulate during a printer
+    // switch; a negative index would read garbage and crash on a wild allocation.
+    if (extruder_id < 0 || extruder_id >= (int)filament_presets.size()) return false;
 
     Slic3r::Preset* filament = filaments.find_preset(filament_presets[extruder_id]);
     if (filament == nullptr) return false;
