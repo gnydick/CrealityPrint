@@ -104,9 +104,10 @@ static MaterialPayload payload_from_preset(const Preset &preset)
     }
     p.emplace_back("name", preset.name); // upsert identity key
 
-    // Carry the slicer's filament id (P + md5 prefix for user presets) onto the
-    // printer as base.id so catalog rows are traceable back to the preset. The
-    // printer accepts at most 5 characters, so send a truncated prefix.
+    // Carry the slicer's filament id onto the printer as base.id so catalog
+    // rows trace back to the preset. New user presets mint 5-char ids (P####,
+    // the K2/CFS material-code convention); the substr is a safety net for
+    // presets created before that change (8-char P+md5 ids).
     if (!preset.filament_id.empty() && preset.filament_id != "null")
         p.emplace_back("id", preset.filament_id.substr(0, 5));
 

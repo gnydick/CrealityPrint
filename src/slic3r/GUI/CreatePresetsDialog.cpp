@@ -588,7 +588,17 @@ static std::string get_filament_id(std::string vendor_typr_serial)
         }
     }
 
-    std::string user_filament_id = "P" + calculate_md5(vendor_typr_serial).substr(0, 7);
+    // Mint a 5-character id ("P" + 4 decimal digits) to match the K2/CFS
+    // ecosystem material-code convention: material_database.json ids and CFS
+    // RFID material codes are 5 characters (vendor letter + 4 digits), and the
+    // sync feature carries this id onto the printer verbatim.
+    auto mint_id = [](const std::string &seed) {
+        unsigned long h = std::stoul(calculate_md5(seed).substr(0, 7), nullptr, 16);
+        char buf[6];
+        snprintf(buf, sizeof(buf), "P%04lu", h % 10000);
+        return std::string(buf);
+    };
+    std::string user_filament_id = mint_id(vendor_typr_serial);
 
     while (filament_id_to_filament_name.find(user_filament_id) != filament_id_to_filament_name.end()) {//find same filament id
         bool have_same_filament_name = false;
@@ -602,7 +612,7 @@ static std::string get_filament_id(std::string vendor_typr_serial)
             break;
         }
         else { //Different names correspond to the same filament id
-            user_filament_id = "P" + calculate_md5(vendor_typr_serial + get_curr_time()).substr(0, 7);
+            user_filament_id = mint_id(vendor_typr_serial + get_curr_time());
         }
     }
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " filament name is: " << vendor_typr_serial << "and create filament_id is: " << user_filament_id;
