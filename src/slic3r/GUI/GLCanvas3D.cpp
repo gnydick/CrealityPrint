@@ -29,6 +29,7 @@
 #include "Plater.hpp"
 #include "MainFrame.hpp"
 #include "GUI_App.hpp"
+#include "FilamentSyncDialog.hpp"
 #include "GUI_ObjectList.hpp"
 #include "GUI_Colors.hpp"
 #include "Mouse3DController.hpp"
@@ -10202,6 +10203,37 @@ void GLCanvas3D::_render_slice_control() const
     config.processWindows(
         "Slice",
         [&]() {
+            // Sync row: push all custom filaments to printers picked in a dialog.
+            {
+                ImVec2 sync_pos  = ImGui::GetCursorScreenPos();
+                ImVec2 sync_size = ImVec2(bigcfg.size.x + smallcfg.size.x, bigcfg.size.y);
+                ImGui::InvisibleButton("sync_filaments_custom", sync_size);
+                bool   sync_hovered = ImGui::IsItemHovered();
+                bool   sync_active  = ImGui::IsItemActive();
+                ImVec4 sync_bg = config.getColor(bigcfg.bg);
+                ImVec4 sync_hv = ImVec4(93.f / 255.f, 173.f / 255.f, 226.f / 255.f, 1.0f);
+                ImVec4 sync_ac = config.getColor(bigcfg.fg);
+                ImVec4 sync_col = sync_active ? sync_ac : (sync_hovered ? sync_hv : sync_bg);
+                auto*  sync_dl  = ImGui::GetWindowDrawList();
+                sync_dl->AddRectFilled(sync_pos, ImVec2(sync_pos.x + sync_size.x, sync_pos.y + sync_size.y),
+                                       ImGui::GetColorU32(sync_col), 4.0f * scale);
+                std::string sync_label = _u8L("Sync filaments");
+                ImVec2 sync_tsz = ImGui::CalcTextSize(sync_label.c_str());
+                ImU32  sync_txt = (sync_hovered || sync_active)
+                                     ? IM_COL32(255, 255, 255, 255)
+                                     : ImGui::GetColorU32(config.getColor(DispConfig::e_ct_text));
+                sync_dl->AddText(ImVec2(sync_pos.x + (sync_size.x - sync_tsz.x) * 0.5f,
+                                        sync_pos.y + (sync_size.y - sync_tsz.y) * 0.5f),
+                                 sync_txt, sync_label.c_str());
+                if (ImGui::IsItemClicked()) {
+                    // Open the modal outside the render loop.
+                    wxGetApp().CallAfter([]() {
+                        FilamentSyncDialog dlg(wxGetApp().mainframe);
+                        dlg.ShowModal();
+                    });
+                }
+            }
+
             static int               s_sst = MainFrame::eSlicePlate;
             std::vector<std::string> s_slice_string{_u8L("Slice plate"), _u8L("Slice all")};
             bool                     enslice = wxGetApp().mainframe->m_slice_btn->IsEnabled();
@@ -10216,7 +10248,7 @@ void GLCanvas3D::_render_slice_control() const
             bool main_hovered = ImGui::IsItemHovered() && en != 1;
             bool main_active  = ImGui::IsItemActive()  && en != 1;
             ImVec4 main_bg = en == 2 ? config.getColor(bigcfg.fg) : config.getColor(bigcfg.bg);
-            ImVec4 main_hv = ImVec4(68.f/255.f, 205.f/255.f, 122.f/255.f, 1.0f);
+            ImVec4 main_hv = ImVec4(93.f/255.f, 173.f/255.f, 226.f/255.f, 1.0f);
             ImVec4 main_ac = config.getColor(bigcfg.fg);
             ImVec4 main_col = main_active ? main_ac : (main_hovered ? main_hv : main_bg);
             float  main_round = 4.0f * scale;
@@ -10262,7 +10294,7 @@ void GLCanvas3D::_render_slice_control() const
             bool drop_hovered = ImGui::IsItemHovered();
             bool drop_active  = ImGui::IsItemActive();
             ImVec4 sm_bg = (en == 2 ? config.getColor(bigcfg.fg) : config.getColor(bigcfg.bg));
-            ImVec4 sm_hv = ImVec4(68.f/255.f, 205.f/255.f, 122.f/255.f, 1.0f);
+            ImVec4 sm_hv = ImVec4(93.f/255.f, 173.f/255.f, 226.f/255.f, 1.0f);
             ImVec4 sm_ac = config.getColor(smallcfg.fg);
             ImVec4 drop_col = drop_active ? sm_ac : (drop_hovered ? sm_hv : sm_bg);
             float  drop_round = 4.0f * scale;
@@ -10327,7 +10359,7 @@ void GLCanvas3D::_render_slice_control() const
                 ImVec4 list_bg = wxGetApp().dark_mode() ? ImVec4(0x59/255.f, 0x59/255.f, 0x5D/255.f, 1.0f)
                                                        : config.getColor(DispConfig::e_ct_white);
                 ImVec4 list_ac = config.getColor(bigcfg.fg);
-                ImVec4 list_hv = ImVec4(68.f/255.f, 205.f/255.f, 122.f/255.f, 1.0f);
+                ImVec4 list_hv = ImVec4(93.f/255.f, 173.f/255.f, 226.f/255.f, 1.0f);
                 ImGui::PushStyleColor(ImGuiCol_Button, list_bg);
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, list_hv);
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, list_ac);
@@ -10443,7 +10475,7 @@ void GLCanvas3D::_render_slice_control() const
             bool main_hovered = ImGui::IsItemHovered() && enprint;
             bool main_active  = ImGui::IsItemActive()  && enprint;
             ImVec4 main_bg = (enprint ? config.getColor(bigcfg.fg) : config.getColor(bigcfg.bg));
-            ImVec4 main_hv = ImVec4(68.f/255.f, 205.f/255.f, 122.f/255.f, 1.0f);
+            ImVec4 main_hv = ImVec4(93.f/255.f, 173.f/255.f, 226.f/255.f, 1.0f);
             ImVec4 main_ac = config.getColor(bigcfg.fg);
             ImVec4 main_col = main_active ? main_ac : (main_hovered ? main_hv : main_bg);
             float  main_round = 4.0f * scale;
@@ -10500,7 +10532,7 @@ void GLCanvas3D::_render_slice_control() const
         bool drop_hovered_p = ImGui::IsItemHovered();
         bool drop_active_p  = ImGui::IsItemActive();
         ImVec4 smp_bg = (enprint ? config.getColor(bigcfg.fg) : config.getColor(bigcfg.bg));
-        ImVec4 smp_hv = ImVec4(68.f/255.f, 205.f/255.f, 122.f/255.f, 1.0f);
+        ImVec4 smp_hv = ImVec4(93.f/255.f, 173.f/255.f, 226.f/255.f, 1.0f);
         ImVec4 smp_ac = config.getColor(smallcfg.fg);
         ImVec4 drop_col_p = drop_active_p ? smp_ac : (drop_hovered_p ? smp_hv : smp_bg);
         float  drop_round_p = 4.0f * scale;
@@ -10563,7 +10595,7 @@ void GLCanvas3D::_render_slice_control() const
             ImVec4 list_bg = wxGetApp().dark_mode() ? ImVec4(0x59/255.f, 0x59/255.f, 0x5D/255.f, 1.0f)
                                                    : config.getColor(DispConfig::e_ct_white);
             ImVec4 list_ac = config.getColor(bigcfg.fg);
-            ImVec4 list_hv = ImVec4(68.f/255.f, 205.f/255.f, 122.f/255.f, 1.0f);
+            ImVec4 list_hv = ImVec4(93.f/255.f, 173.f/255.f, 226.f/255.f, 1.0f);
             ImGui::PushStyleColor(ImGuiCol_Button, list_bg);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, list_hv);
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, list_ac);

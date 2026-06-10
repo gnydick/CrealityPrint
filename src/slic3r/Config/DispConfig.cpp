@@ -299,7 +299,7 @@ ImVec2 DispConfig::getWindowSize(WindowType tp, float scale) {
         winsize = { 20, 17 };
         break;
     case DispConfig::e_wt_slice:
-        winsize = { 202, 82 };
+        winsize = { 202, 116 }; // three rows: sync filaments, slice, send/print
         break;
     case DispConfig::e_wt_msg:
         winsize = { 300, 85 };
