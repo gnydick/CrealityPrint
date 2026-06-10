@@ -237,7 +237,9 @@ FilamentSyncDialog::FilamentSyncDialog(wxWindow *parent)
         wxBoxSizer *row = new wxBoxSizer(wxHORIZONTAL);
         auto *checkbox  = new ::CheckBox(scrolled);
         row->Add(checkbox, 0, wxALIGN_CENTER_VERTICAL, 0);
-        wxString text = wxString::Format("%s (%s)", from_u8(dev.name), from_u8(dev.address));
+        wxString text = from_u8(dev.name);
+        if (dev.name != dev.address)
+            text += wxString::Format(" (%s)", from_u8(dev.address));
         if (!dev.online)
             text += _L(" - offline");
         auto *label = new wxStaticText(scrolled, wxID_ANY, text);
