@@ -1,7 +1,9 @@
 # SanityPrint <-> K2 Plus Material Sync — Field Contract
 
 **Push** = `POST /server/material?<params>` (all data in query string; body is a throwaway `"{}"`, ignore it).
-**Pull** = `GET /server/material` (slicer reads `result.materials[].base` + `kvParam`).
+**Pull** = `GET /server/material` (`result.materials[].base` + `kvParam`) — available to API
+clients; SanityPrint itself no longer reads it (sync is push-only per
+`superpowers/specs/2026-06-10-filament-sync-pushonly-design.md`).
 
 ## Identity params (-> `base`)
 
@@ -9,7 +11,7 @@
 |---|---|---|
 | `vendor` | `base.brand` | REQUIRED. Slicer sends `filament_vendor`, falls back to `"Custom"` |
 | `name` | `base.name` | Upsert match key (tier 2). The preset's display name |
-| `id` | `base.id` | Upsert primary key (tier 1). Omitted until the slicer holds a canonical id; **5 chars**; printer auto-mints `U####` when absent. Immutable after creation. Response must always return the row's canonical `result.id` |
+| `id` | `base.id` | Upsert primary key (tier 1). **SanityPrint never sends it** (its pushes are id-less; the printer mints `U####`). Other API clients may send an explicit unused id (**5 chars**). Immutable after creation. Response must always return the row's canonical `result.id` |
 | `type` | `base.type` | `filament_type` (e.g. PLA, PETG, TPU, or custom strings) |
 
 ## Standard parameter params (-> `kvParam`, keyed by slicer config name)
@@ -67,5 +69,5 @@ normalized to `#RRGGBB` on either side.
 
 1. Any param absent from a request -> leave that kvParam untouched (partial upsert).
 2. Two-tier upsert key: `id` first (update in place, rename allowed), then `name` (update, return existing id — never overwrite a row's id), else insert (mint `U####` or honor explicit unused id).
-3. Response shape on POST: `{"result":{"action":"register|update","brand":...,"id":...,"name":...,"count":N}}` — `id` must always be the row's canonical id; the slicer adopts it.
-4. On GET, every `kvParam` key the printer stores is applied generically by the slicer (keys are literal slicer config names) — so printer-side additions flow to the slicer with zero slicer changes.
+3. Response shape on POST: `{"result":{"action":"register|update","brand":...,"id":...,"name":...,"count":N}}` — `id` must always be the row's canonical id. (Informational for SanityPrint, which ignores it; ids are printer-local.)
+4. On GET, every `kvParam` key the printer stores can be applied generically by pull-capable API clients (keys are literal slicer config names). SanityPrint does not pull.
