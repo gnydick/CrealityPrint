@@ -112,13 +112,6 @@ static MaterialPayload payload_from_preset(const Preset &preset)
     }
     p.emplace_back("name", preset.name); // upsert identity key
 
-    // Only canonical ids (printer-minted, previously adopted) are sent, so all
-    // printers converge on one id. Slicer placeholder ids (P-prefixed) are
-    // omitted: the printer mints U#### and start_sync adopts it from the
-    // upsert response.
-    if (!preset.filament_id.empty() && preset.filament_id != "null" && preset.filament_id.front() != 'P')
-        p.emplace_back("id", preset.filament_id);
-
     add_string_param(cfg, p, "type", "filament_type");
     add_string_param(cfg, p, "color", "default_filament_colour");
     add_int_param(cfg, p, "mintemp", "nozzle_temperature_range_low");
