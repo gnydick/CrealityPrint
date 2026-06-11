@@ -347,6 +347,36 @@ if (WIN32)
             #     COMMENT "TARGET_FILE_DIR :$<TARGET_FILE_DIR:${PROJECT_DLL}>/resources/"
     		# 	)
         endforeach ()
+
+        # For multi-config generators (Visual Studio), copy DLLs for all configurations
+        # For single-config generators, CMAKE_CONFIGURATION_TYPES is empty, use CMAKE_BUILD_TYPE instead
+        if(CMAKE_CONFIGURATION_TYPES)
+            # Multi-config generator (Visual Studio, Ninja Multi-Config, etc.)
+            foreach(CONF ${CMAKE_CONFIGURATION_TYPES})
+                if ("${CONF}" STREQUAL "Debug")
+                    sanityprint_copy_dlls(COPY_DLLS "Debug" "d" output_dlls_Debug)
+                    if(CGAL_ENABLE_VLD AND VLD_LIBRARY)
+                        copy_vld_dlls(COPY_DLLS "Debug")
+                    endif()
+                elseif("${CONF}" STREQUAL "RelWithDebInfo")
+                    sanityprint_copy_dlls(COPY_DLLS "RelWithDebInfo" "" output_dlls_RelWithDebInfo)
+                elseif("${CONF}" STREQUAL "Release")
+                    sanityprint_copy_dlls(COPY_DLLS "Release" "" output_dlls_Release)
+                endif()
+            endforeach()
+        else()
+            # Single-config generator (Makefile, Ninja, etc.)
+            if ("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+                sanityprint_copy_dlls(COPY_DLLS "Debug" "d" output_dlls_Debug)
+                if(CGAL_ENABLE_VLD AND VLD_LIBRARY)
+                    copy_vld_dlls(COPY_DLLS "Debug")
+                endif()
+            elseif("${CMAKE_BUILD_TYPE}" STREQUAL "RelWithDebInfo")
+                sanityprint_copy_dlls(COPY_DLLS "RelWithDebInfo" "" output_dlls_RelWithDebInfo)
+            else()
+                sanityprint_copy_dlls(COPY_DLLS "Release" "" output_dlls_Release)
+            endif()
+        endif()
     else ()
         file(TO_NATIVE_PATH "${CMAKE_CURRENT_BINARY_DIR}/resources" WIN_RESOURCES_SYMLINK)
         message(STATUS "SLIC3R_RESOURCES_DIR_WIN222=${SLIC3R_RESOURCES_DIR_WIN}")
@@ -357,28 +387,10 @@ if (WIN32)
             COMMENT "Symlinking the resources directory into the build tree"
             VERBATIM
         )
-    endif ()
 
-    # Copy the runtime DLLs next to the binaries. This must sit outside the
-    # generator-type branch above: it previously lived inside the multi-config
-    # branch, so single-config generators (Ninja, used by CLion) never got the
-    # DLLs and the built app failed to launch.
-    if(CMAKE_CONFIGURATION_TYPES)
-        # Multi-config generator (Visual Studio, Ninja Multi-Config, etc.)
-        foreach(CONF ${CMAKE_CONFIGURATION_TYPES})
-            if ("${CONF}" STREQUAL "Debug")
-                sanityprint_copy_dlls(COPY_DLLS "Debug" "d" output_dlls_Debug)
-                if(CGAL_ENABLE_VLD AND VLD_LIBRARY)
-                    copy_vld_dlls(COPY_DLLS "Debug")
-                endif()
-            elseif("${CONF}" STREQUAL "RelWithDebInfo")
-                sanityprint_copy_dlls(COPY_DLLS "RelWithDebInfo" "" output_dlls_RelWithDebInfo)
-            elseif("${CONF}" STREQUAL "Release")
-                sanityprint_copy_dlls(COPY_DLLS "Release" "" output_dlls_Release)
-            endif()
-        endforeach()
-    else()
-        # Single-config generator (Makefile, Ninja, etc.)
+        # The single-config branch of the DLL-copy block above is unreachable
+        # (it sits inside the multi-config-only branch), so single-config
+        # generators (Ninja, used by CLion) must copy the runtime DLLs here.
         if ("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
             sanityprint_copy_dlls(COPY_DLLS "Debug" "d" output_dlls_Debug)
             if(CGAL_ENABLE_VLD AND VLD_LIBRARY)
@@ -389,7 +401,7 @@ if (WIN32)
         else()
             sanityprint_copy_dlls(COPY_DLLS "Release" "" output_dlls_Release)
         endif()
-    endif()
+    endif ()
 else ()
     if (APPLE AND NOT CMAKE_MACOSX_BUNDLE)
         # On OSX, the name of the binary matches the name of the Application.
